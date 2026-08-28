@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.1.2] — 2026-08-29
+
+First fully-working release on a real machine (validated on Zen + Sine 2.x, Windows).
+
+### Fixed
+- **⚙ panel crashed on open** (`DOMException: invalid string`): in XUL documents `innerHTML` is parsed with XML rules, and one bare attribute (`<option … selected>`) is illegal XML — the whole panel markup failed to parse, so Fetch Models was unreachable. All markup is now XML-well-formed.
+- **Sort button position**: now placed right beside the workspace-header Clear button (auto-detected at runtime); falls back to just under the header row instead of the strip bottom.
+
+### Added
+- **Fetch Models inside the Sine settings panel** — a ⟳ Fetch Models button is injected next to the "Model name" field in Zen Settings → Mods (script now also runs in `preferences.xhtml`). Picking a model from the popup writes the pref through Sine's own save path (input + change event), showing its restart toast.
+- README + TESTING now document the `sine.allow-unsafe-js = true` requirement — Sine silently refuses to execute JS from non-store repos without it (this cost a full debugging session).
+
 ## [0.1.1] — 2026-08-29
 
 Critical fix: mod installed via Sine but never executed.

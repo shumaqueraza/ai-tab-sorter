@@ -41,7 +41,7 @@
   {
     "property": "mod.aitabsort.model",
     "type": "string",
-    "label": "Model name (or pick from the Fetch Models list in the mod panel)",
+    "label": "Model name (set with the ⟳ Fetch Models button beside this field)",
     "placeholder": "llama3.1:8b"
   },
   {

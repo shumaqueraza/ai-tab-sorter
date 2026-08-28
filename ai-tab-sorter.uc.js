@@ -18,9 +18,13 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.1.1";
+  const VERSION = "0.1.2";
   const PREF_BRANCH = "mod.aitabsort.";
   const LOG_PREFIX = "[AITabSorter]";
+  // Settings page (Sine renders mod prefs here) — we enhance it instead of
+  // injecting tab-strip UI.
+  const IS_PREFS = typeof location !== "undefined"
+    && location.href.startsWith("chrome://browser/content/preferences");
 
   const log = (...args) => {
     try {
@@ -811,20 +815,20 @@
           <select id="ats-gran">
             <option value="1">Broadest (3-6 groups)</option>
             <option value="2">Broad</option>
-            <option value="3" selected>Balanced</option>
+            <option value="3" selected="selected">Balanced</option>
             <option value="4">Specific</option>
             <option value="5">Finest (12+ groups)</option>
           </select>
           <span class="ats-l">Output</span>
           <select id="ats-out">
-            <option value="lines" selected>Simple lines (works everywhere)</option>
+            <option value="lines" selected="selected">Simple lines (works everywhere)</option>
             <option value="json">JSON (strict models)</option>
           </select>
           <span class="ats-l">Min group size</span>
           <input id="ats-min" type="number" min="1" max="10" step="1"/>
           <span class="ats-l">Data sent</span>
           <select id="ats-payload">
-            <option value="title-url">Title + full URL</option>
+            <option value="title-url" selected="selected">Title + full URL</option>
             <option value="title-host">Title + hostname</option>
             <option value="title">Title only</option>
           </select>
@@ -1025,33 +1029,77 @@
       return tabs ? [tabs] : [];
     }
 
+    /** Locate a header "Clear"-style action button to sit beside (user request:
+     *  Sort belongs next to Clear in the workspace header, not at strip bottom). */
+    static findHeaderAction() {
+      try {
+        const strip = window.gZenWorkspaces?.activeWorkspaceStrip
+          || document.querySelector(".zen-workspace-normal-tabs-section")?.parentElement;
+        if (!strip) return null;
+        for (const el of strip.querySelectorAll("button, toolbarbutton, label, span")) {
+          const t = (el.getAttribute("label") || el.textContent || "").trim().toLowerCase();
+          if (t && (t === "clear" || t === "clear all" || t === "clean")) return el;
+        }
+      } catch (_e) { /* fall through */ }
+      return null;
+    }
+
     static ensure() {
       if (!PrefStore.get("enabled") || !PrefStore.get("showButtons")) return;
-      const anchors = this.anchors();
-      for (const anchor of anchors) {
-        if (!anchor.querySelector(`#${this.SORT_ID}`)) {
-          try {
-            const btn = window.MozXULElement.parseXULToFragment(
-              `<toolbarbutton id="${this.SORT_ID}" class="ai-tab-sorter-btn" tooltiptext="AI Tab Sorter — sort tabs into groups (select tabs to sort only them)"/>`
-            ).firstChild;
-            btn.addEventListener("command", () => SortController.sort());
-            anchor.append(btn);
-          } catch (e) { log("sort button injection failed", e); }
+
+      // Where a button wants to live this pass: right after the header Clear
+      // button → else just above the tabs section (under the header row) →
+      // else the legacy periphery/tabs fallbacks.
+      const placement = () => {
+        const clearBtn = this.findHeaderAction();
+        if (clearBtn?.isConnected) return { insert: (b) => clearBtn.after(b) };
+        const sec = document.querySelector(".zen-workspace-normal-tabs-section");
+        if (sec?.parentElement) return { insert: (b) => sec.parentElement.insertBefore(b, sec) };
+        const periphery = document.querySelector("#tabbrowser-arrowscrollbox-periphery");
+        if (periphery) return { insert: (b) => periphery.before(b) };
+        const tabs = document.querySelector("#tabbrowser-tabs");
+        if (tabs) return { insert: (b) => tabs.append(b) };
+        return null;
+      };
+
+      const place = (id, tooltip, onClick) => {
+        let btn = document.getElementById(id);
+        const spot = placement();
+        if (!spot) {
+          if (!this.#warnedNoAnchor) {
+            this.#warnedNoAnchor = true;
+            console.info(LOG_PREFIX, "no tab-strip anchor found yet — will keep retrying");
+          }
+          return;
         }
-        if (!anchor.querySelector(`#${this.GEAR_ID}`)) {
+        if (!btn || !btn.isConnected) {
           try {
-            const btn = window.MozXULElement.parseXULToFragment(
+            btn = window.MozXULElement.parseXULToFragment(
+              `<toolbarbutton id="${id}" class="ai-tab-sorter-btn" tooltiptext="${tooltip}"/>`
+            ).firstChild;
+            btn.addEventListener("command", onClick);
+          } catch (e) { log("button injection failed", e); return; }
+        }
+        // (Re)position: Zen rebuilds strips; also upgrades old bottom placement.
+        try { spot.insert(btn); } catch (_e) { /* already in place */ }
+      };
+
+      place(this.SORT_ID, "AI Tab Sorter — sort tabs into groups (select tabs to sort only them)",
+        () => SortController.sort());
+      // Gear follows the sort button.
+      const sortBtn = document.getElementById(this.SORT_ID);
+      if (sortBtn?.isConnected) {
+        let gear = document.getElementById(this.GEAR_ID);
+        if (!gear || !gear.isConnected) {
+          try {
+            gear = window.MozXULElement.parseXULToFragment(
               `<toolbarbutton id="${this.GEAR_ID}" class="ai-tab-sorter-btn" tooltiptext="AI Tab Sorter settings"/>`
             ).firstChild;
-            btn.addEventListener("command", () => SettingsPanel.open(btn));
-            anchor.append(btn);
+            gear.addEventListener("command", () => SettingsPanel.open(gear));
+            sortBtn.after(gear);
           } catch (e) { log("gear button injection failed", e); }
-        }
-      }
-      if (!anchors.length) {
-        if (!this.#warnedNoAnchor) {
-          this.#warnedNoAnchor = true;
-          console.info(LOG_PREFIX, "no tab-strip anchor found yet — will keep retrying");
+        } else {
+          try { sortBtn.after(gear); } catch (_e) { /* in place */ }
         }
       }
     }
@@ -1111,6 +1159,108 @@
   }
 
   /* ══════════════════════════════════════════════════════════════
+   * SettingsPageEnhancer — puts ⟳ Fetch Models INSIDE the Sine mod
+   * settings panel, right next to the "Model name" field (user-facing
+   * request). Runs only in preferences.xhtml. Sine gives each pref row
+   * id = pref property; string prefs save on the input's `change` event,
+   * so picking a model reuses Sine's own save path + restart toast.
+   * ══════════════════════════════════════════════════════════════ */
+  class SettingsPageEnhancer {
+    static MODEL_ROW_ID = "mod.aitabsort.model";
+    static #timer = null;
+    static #enhanced = new WeakSet();
+
+    static init() {
+      // The Mods section builds lazily — poll for the row for up to 2 min.
+      let tries = 0;
+      this.#timer = setInterval(() => {
+        tries += 1;
+        const row = document.getElementById(this.MODEL_ROW_ID);
+        if (row) {
+          clearInterval(this.#timer);
+          this.#enhance(row);
+        } else if (tries > 300) {
+          clearInterval(this.#timer);
+        }
+      }, 400);
+      // Zen rebuilds rows when switching settings categories.
+      try {
+        const obs = new MutationObserver(() => {
+          const row = document.getElementById(this.MODEL_ROW_ID);
+          if (row && !this.#enhanced.has(row)) this.#enhance(row);
+        });
+        obs.observe(document.documentElement, { childList: true, subtree: true });
+      } catch (_e) { /* non-fatal */ }
+    }
+
+    static #enhance(row) {
+      if (this.#enhanced.has(row) || !row.isConnected) return;
+      this.#enhanced.add(row);
+      try {
+        const btn = document.createXULElement("toolbarbutton");
+        btn.setAttribute("label", "⟳ Fetch Models");
+        btn.setAttribute("tooltiptext", "Query the provider's model list and pick one");
+        btn.style.cssText = "min-height:28px;padding:2px 8px;cursor:pointer;";
+        btn.addEventListener("command", () => this.#fetch(row, btn));
+        row.appendChild(btn);
+        console.info(LOG_PREFIX, "Fetch Models added to settings panel (Model row)");
+      } catch (e) { log("settings enhancer failed", e); }
+    }
+
+    static async #fetch(row, btn) {
+      const oldLabel = btn.getAttribute("label");
+      btn.setAttribute("label", "Fetching…");
+      try {
+        const models = await ProviderHub.listModels();
+        PrefStore.set("modelList", JSON.stringify(models));
+        btn.setAttribute("label", `✓ ${models.length} models — pick one ▾`);
+        this.#showPicker(row, btn, models);
+      } catch (err) {
+        btn.setAttribute("label", `✗ ${err.message}`);
+        setTimeout(() => btn.setAttribute("label", oldLabel), 4000);
+        console.error(LOG_PREFIX, "settings Fetch Models failed:", err);
+        return;
+      }
+      setTimeout(() => btn.setAttribute("label", oldLabel), 6000);
+    }
+
+    static #showPicker(row, btn, models) {
+      const picker = document.createXULElement("panel");
+      picker.setAttribute("type", "arrow");
+      picker.style.cssText = "-moz-appearance:none;appearance:none;";
+      const box = document.createXULElement("vbox");
+      box.style.cssText = "max-height:300px;overflow:auto;min-width:260px;padding:4px;";
+      for (const m of models) {
+        const item = document.createXULElement("toolbarbutton");
+        item.setAttribute("label", m.label || m.id);
+        item.style.cssText = "padding:3px 8px;text-align:start;cursor:pointer;";
+        item.addEventListener("command", () => {
+          this.#applyModel(row, m.id);
+          picker.hidePopup();
+          picker.remove();
+        });
+        box.appendChild(item);
+      }
+      picker.appendChild(box);
+      document.documentElement.appendChild(picker);
+      picker.addEventListener("popuphidden", () => picker.remove(), { once: true });
+      picker.openPopup(btn, "after_start", 0, 0, false, null);
+    }
+
+    static #applyModel(row, modelId) {
+      PrefStore.set("model", modelId);
+      // Drive Sine's own save path so the input UI + pref stay in sync.
+      try {
+        const input = row.querySelector("input[type=text], input:not([type])");
+        if (input) {
+          input.value = modelId;
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      } catch (_e) { /* pref already set directly */ }
+    }
+  }
+
+  /* ══════════════════════════════════════════════════════════════
    * Bootstrap — dependency-wait init
    * ══════════════════════════════════════════════════════════════ */
   class Bootstrap {
@@ -1128,6 +1278,13 @@
 
     static async init() {
       if (typeof document === "undefined") return; // Node unit-test context
+      if (IS_PREFS) {
+        // Settings window: no tab strip — enhance the Sine prefs panel instead.
+        globalThis.aiTabSorter = { version: VERSION, prefs: PrefStore, providers: ProviderHub };
+        SettingsPageEnhancer.init();
+        console.info(LOG_PREFIX, `settings-page enhancer active (v${VERSION})`);
+        return;
+      }
       if (document.readyState === "loading") {
         await new Promise((r) => document.addEventListener("DOMContentLoaded", r, { once: true }));
       }

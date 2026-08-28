@@ -5,7 +5,8 @@
   "scripts": {
     "ai-tab-sorter.uc.js": {
       "include": [
-        "chrome://browser/content/browser.xhtml"
+        "chrome://browser/content/browser.xhtml",
+        "chrome://browser/content/preferences/preferences.xhtml"
       ]
     }
   },
@@ -16,7 +17,7 @@
     "chrome": "userChrome.css"
   },
   "author": "shumaqueraza",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "tags": [
     "Zen Browser",
     "Tab Groups",

@@ -39,8 +39,9 @@ A [Zen Browser](https://zen-browser.app) mod (works with the [Sine](https://gith
 
 ### Via Sine (recommended)
 1. Install [Sine](https://github.com/CosmoCreeper/Sine) and [Advanced Tab Groups](https://github.com/Vertex-Mods/Advanced-Tab-Groups).
-2. In Zen: Settings → Sine → add this repository: `shumaqueraza/ai-tab-sorter`.
-3. Updates arrive automatically from `main`.
+2. **Enable JS from unofficial sources** — `about:config` → `sine.allow-unsafe-js` → `true` (required for any mod installed by GitHub repo name; Sine skips its scripts otherwise, silently).
+3. In Zen: Settings → Sine → add this repository: `shumaqueraza/ai-tab-sorter`.
+4. Updates arrive automatically from `main`.
 
 ### Manual (fx-autoconfig)
 1. Install [fx-autoconfig](https://github.com/MrOtherGuy/fx-autoconfig).
@@ -53,6 +54,8 @@ A [Zen Browser](https://zen-browser.app) mod (works with the [Sine](https://gith
 3. Click **⟳ Fetch Models**, pick a model from the dropdown. Done.
 
 For provider-specific setup (LM Studio server toggle, `OLLAMA_ORIGINS`, Gemini keys, rate limits), see [docs/PROVIDERS.md](docs/PROVIDERS.md).
+
+> 💡 The **⟳ Fetch Models** button also lives directly in Zen Settings → Mods, next to the *Model name* field — click it there to pull your provider's model list and pick one.
 
 ## 🧠 How it works
 
