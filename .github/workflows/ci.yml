@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    name: Lint + manifest validation + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install ESLint
+        run: npm install --no-save eslint globals
+
+      - name: Lint mod source
+        run: npx eslint src/ai-tab-sorter.uc.js
+
+      - name: Validate manifests (theme.json + preferences.json)
+        run: node scripts/validate-manifests.mjs
+
+      - name: Unit tests (pure modules)
+        run: node --test scripts/unit-tests.mjs
+
+  package:
+    name: Package release artifact
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Zip for manual fx-autoconfig installs
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          zip -j "ai-tab-sorter-${VERSION}.zip" \
+            src/ai-tab-sorter.uc.js \
+            theme.json \
+            preferences.json \
+            README.md \
+            LICENSE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-tab-sorter-release
+          path: ./*.zip

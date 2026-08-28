@@ -1,0 +1,30 @@
+{
+  "id": "ai-tab-sorter",
+  "name": "AI Tab Sorter",
+  "description": "Sort tabs into smart groups with any AI — local or cloud.",
+  "scripts": {
+    "ai-tab-sorter.uc.js": {
+      "include": [
+        "chrome://browser/content/browser.xhtml"
+      ]
+    }
+  },
+  "homepage": "https://github.com/shumaqueraza/ai-tab-sorter",
+  "preferences": "https://raw.githubusercontent.com/shumaqueraza/ai-tab-sorter/main/preferences.json",
+  "readme": "https://raw.githubusercontent.com/shumaqueraza/ai-tab-sorter/main/README.md",
+  "style": {
+    "chrome": "userChrome.css"
+  },
+  "author": "shumaqueraza",
+  "version": "0.1.0",
+  "tags": [
+    "Zen Browser",
+    "Tab Groups",
+    "AI",
+    "Tab Management"
+  ],
+  "createdAt": "2026-08-29",
+  "updatedAt": "2026-08-29",
+  "ai": "yes",
+  "fork": ["zen"]
+}

@@ -1,0 +1,89 @@
+[
+  {
+    "property": "mod.aitabsort.enabled",
+    "type": "checkbox",
+    "label": "Enable AI Tab Sorter",
+    "default": "true"
+  },
+  {
+    "type": "separator",
+    "label": "AI Provider"
+  },
+  {
+    "property": "mod.aitabsort.provider",
+    "type": "dropdown",
+    "label": "Provider preset",
+    "options": [
+      { "label": "Ollama (local)", "value": "ollama" },
+      { "label": "LM Studio (local)", "value": "lmstudio" },
+      { "label": "llama.cpp server (local)", "value": "llamacpp" },
+      { "label": "OpenAI", "value": "openai" },
+      { "label": "OpenRouter", "value": "openrouter" },
+      { "label": "Groq", "value": "groq" },
+      { "label": "Together", "value": "together" },
+      { "label": "Mistral", "value": "mistral" },
+      { "label": "Google Gemini", "value": "gemini" },
+      { "label": "Custom (OpenAI-compatible)", "value": "custom" }
+    ],
+    "default": "ollama"
+  },
+  {
+    "property": "mod.aitabsort.baseURL",
+    "type": "string",
+    "label": "Base URL (e.g. http://localhost:11434)",
+    "placeholder": "http://localhost:11434"
+  },
+  {
+    "property": "mod.aitabsort.apiKey",
+    "type": "string",
+    "label": "API key (leave empty for local runtimes)"
+  },
+  {
+    "property": "mod.aitabsort.model",
+    "type": "string",
+    "label": "Model name (or pick from the Fetch Models list in the mod panel)",
+    "placeholder": "llama3.1:8b"
+  },
+  {
+    "type": "separator",
+    "label": "Behavior"
+  },
+  {
+    "property": "mod.aitabsort.reuseGroups",
+    "type": "checkbox",
+    "label": "Reuse existing groups when tabs fit",
+    "default": "true"
+  },
+  {
+    "property": "mod.aitabsort.heuristicFallback",
+    "type": "checkbox",
+    "label": "Fall back to offline (no-AI) grouping when the provider is unreachable",
+    "default": "true"
+  },
+  {
+    "type": "separator",
+    "label": "Privacy"
+  },
+  {
+    "property": "mod.aitabsort.payloadMode",
+    "type": "dropdown",
+    "label": "Data sent to the model",
+    "options": [
+      { "label": "Title + URL", "value": "title-url" },
+      { "label": "Title + hostname only", "value": "title-host" },
+      { "label": "Title only", "value": "title" }
+    ],
+    "default": "title-url"
+  },
+  {
+    "property": "mod.aitabsort.showButtons",
+    "type": "checkbox",
+    "label": "Show Sort and Settings buttons in the tab strip",
+    "default": "true"
+  },
+  {
+    "property": "mod.aitabsort.debugLogging",
+    "type": "checkbox",
+    "label": "Verbose console logging ([AITabSorter] prefix)"
+  }
+]
