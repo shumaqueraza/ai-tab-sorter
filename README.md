@@ -44,7 +44,7 @@ A [Zen Browser](https://zen-browser.app) mod (works with the [Sine](https://gith
 
 ### Manual (fx-autoconfig)
 1. Install [fx-autoconfig](https://github.com/MrOtherGuy/fx-autoconfig).
-2. Copy `src/ai-tab-sorter.uc.js` into your profile's `chrome/JS` folder.
+2. Copy `ai-tab-sorter.uc.js` into your profile's `chrome/JS` folder.
 3. Go to `about:support` → **Clear startup cache** → restart Zen.
 
 ### Set up a provider
@@ -62,7 +62,7 @@ click ⇅  →  snapshot active-workspace tabs  →  build batched prompt
          →  reuse matching groups / create new ones via ATG
 ```
 
-Titles + URLs are the only inputs (configurable). One batched call per ≤30 tabs, `temperature 0.1`, with a count-repair ladder for small local models, and a zero-network heuristic fallback (domain + keyword clustering) when the provider is unreachable. Full design in [docs/RESEARCH.md](docs/RESEARCH.md) · test walkthrough in [TESTING.md](TESTING.md).
+Titles + URLs are the only inputs (configurable). One batched call per ≤30 tabs, `temperature 0.1`, with a count-repair ladder for small local models, and a zero-network heuristic fallback (domain + keyword clustering) when the provider is unreachable. Full design in [docs/RESEARCH.md](docs/RESEARCH.md) · source-level teardown of every competing Zen AI tab mod in [docs/COMPETITORS.md](docs/COMPETITORS.md) · test walkthrough in [TESTING.md](TESTING.md).
 
 ## ⚙️ Settings
 

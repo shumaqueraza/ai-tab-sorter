@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const src = readFileSync("src/ai-tab-sorter.uc.js", "utf8");
+const src = readFileSync("ai-tab-sorter.uc.js", "utf8");
 const mod = { exports: {} };
 new Function("module", "exports", src)(mod, mod.exports);
 const { PrefStore, ProviderHub, PromptBuilder, ResponseParser, HeuristicSorter } = mod.exports;

@@ -21,7 +21,7 @@ jobs:
         run: npm install --no-save eslint globals
 
       - name: Lint mod source
-        run: npx eslint src/ai-tab-sorter.uc.js
+        run: npx eslint ai-tab-sorter.uc.js
 
       - name: Validate manifests (theme.json + preferences.json)
         run: node scripts/validate-manifests.mjs
@@ -41,7 +41,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           zip -j "ai-tab-sorter-${VERSION}.zip" \
-            src/ai-tab-sorter.uc.js \
+            ai-tab-sorter.uc.js \
             theme.json \
             preferences.json \
             README.md \

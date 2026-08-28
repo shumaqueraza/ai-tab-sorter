@@ -7,7 +7,7 @@
  *  - preferences.json violates the official Zen preferences spec
  *  - referenced URLs do not point at this repository's raw paths
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 
 const fail = (msgs) => {
   console.error("✖ manifest validation failed:\n" + msgs.map((m) => `  - ${m}`).join("\n"));
@@ -35,8 +35,13 @@ if (theme.description && theme.description.length >= 100) errors.push(`theme.jso
 
 if (!/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(theme.version || "")) errors.push(`theme.json: version "${theme.version}" is not semver`);
 
-// Every script entry must declare an include list targeting browser.xhtml.
+// Every script entry must declare an include list targeting browser.xhtml,
+// AND the script file must actually exist at that path in the repo — a 404
+// script key means Sine silently installs a dead mod (v0.1.0 bug).
 for (const [file, def] of Object.entries(theme.scripts || {})) {
+  if (!existsSync(file)) {
+    errors.push(`theme.json: scripts["${file}"] — file does not exist at repo root "${file}" (Sine resolves script keys from the repo root)`);
+  }
   if (!Array.isArray(def?.include) || def.include.length === 0) {
     errors.push(`theme.json: scripts["${file}"].include must be a non-empty array`);
   }
@@ -51,6 +56,12 @@ for (const field of ["preferences", "readme"]) {
   if (url && !/^https:\/\/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/main\//.test(url)) {
     errors.push(`theme.json: "${field}" should be a raw.githubusercontent.com .../main/ URL`);
   }
+}
+
+// Style files referenced by theme.json must exist too.
+for (const scope of ["chrome", "content"]) {
+  const f = theme.style?.[scope];
+  if (f && !existsSync(f)) errors.push(`theme.json: style.${scope} → "${f}" does not exist in the repo`);
 }
 
 /* ── preferences.json ───────────────────────────────────────── */

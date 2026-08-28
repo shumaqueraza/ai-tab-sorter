@@ -6,13 +6,13 @@ Thanks for helping! This mod is **vanilla JS with zero build step** — the file
 
 1. Clone the repo.
 2. Install [Zen Browser](https://zen-browser.app) (stable channel; test alpha/beta before releases).
-3. Install [Sine](https://github.com/CosmoCreeper/Sine), add this repo by name — or copy `src/ai-tab-sorter.uc.js` to your profile's `chrome/JS` folder via [fx-autoconfig](https://github.com/MrOtherGuy/fx-autoconfig).
+3. Install [Sine](https://github.com/CosmoCreeper/Sine), add this repo by name — or copy `ai-tab-sorter.uc.js` to your profile's `chrome/JS` folder via [fx-autoconfig](https://github.com/MrOtherGuy/fx-autoconfig).
 4. After changes: `about:support` → **Clear startup cache** → restart Zen. Console (`Ctrl+Shift+J`) shows `[AITabSorter]` logs when debug logging is on.
 
 ## Before opening a PR
 
 ```bash
-npx eslint src/ai-tab-sorter.uc.js --max-warnings 0   # lint (privileged globals are declared)
+npx eslint ai-tab-sorter.uc.js --max-warnings 0   # lint (privileged globals are declared)
 node scripts/validate-manifests.mjs                    # theme.json + preferences.json spec
 node --test scripts/unit-tests.mjs                     # pure-module tests
 ```

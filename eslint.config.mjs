@@ -4,7 +4,7 @@ import globals from "globals";
 export default [
   js.configs.recommended,
   {
-    files: ["src/**/*.uc.js"],
+    files: ["*.uc.js"],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: "script",

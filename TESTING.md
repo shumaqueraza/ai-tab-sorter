@@ -79,7 +79,7 @@ Push any change to `main`, bump `version` in `theme.json`, commit. Users' Sine p
 2. `about:config` → `toolkit.legacyUserProfileCustomizations.stylesheets` → **true**.
 3. Find your profile folder: `about:support` → "Profile Folder" → Open.
 4. Copy into the profile:
-   - `src/ai-tab-sorter.uc.js` → `chrome/JS/`
+   - `ai-tab-sorter.uc.js` → `chrome/JS/`
    - `userChrome.css` → `chrome/` (append if you already have one)
 5. `about:support` → **Clear startup cache** → restart Zen.
 6. Continue at Step 3 above.
@@ -121,7 +121,7 @@ Enable **Debug logging** in the ⚙ panel for verbose `[AITabSorter]` traces.
 ## Pre-publish checklist
 
 - [x] Repo URLs + author set everywhere (theme.json, README, LICENSE → `shumaqueraza/ai-tab-sorter`)
-- [ ] `npm run` checks pass locally: `npx eslint src/ai-tab-sorter.uc.js` · `node scripts/validate-manifests.mjs` · `node --test scripts/unit-tests.mjs`
+- [ ] `npm run` checks pass locally: `npx eslint ai-tab-sorter.uc.js` · `node scripts/validate-manifests.mjs` · `node --test scripts/unit-tests.mjs`
 - [ ] Tested Path A end-to-end from the GitHub repo (Sine is what users use)
 - [ ] Tested: Ollama + one cloud provider, sort-all + sort-selected, group reuse
 - [ ] Screenshot 600×400 PNG recorded for the Zen Mods Registry submission
