@@ -12,6 +12,7 @@
     }
   },
   "homepage": "https://github.com/shumaqueraza/ai-tab-sorter",
+  "image": "https://raw.githubusercontent.com/shumaqueraza/ai-tab-sorter/main/image.png",
   "preferences": "https://raw.githubusercontent.com/shumaqueraza/ai-tab-sorter/main/preferences.json",
   "readme": "https://raw.githubusercontent.com/shumaqueraza/ai-tab-sorter/main/README.md",
   "style": {
