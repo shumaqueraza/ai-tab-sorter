@@ -4,7 +4,7 @@
 // ==/UserScript==
 /*
  * AI Tab Sorter — on-demand, AI-powered tab grouping for Zen Browser.
- * v0.1.3 — Apache-2.0 licensed.
+ * v0.1.4 — Apache-2.0 licensed.
  *
  * Sort appears as a small twin of Zen's native "Clear" button (left of it,
  * in the workspace tabs header). Click = categorize the workspace's tabs
@@ -27,7 +27,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.1.3";
+  const VERSION = "0.1.4";
   const PREF_BRANCH = "mod.aitabsort.";
   const LOG_PREFIX = "[AITabSorter]";
 
@@ -71,6 +71,7 @@
       granularity: 3,            // 1 broad … 5 fine-grained
       outputMode: "lines",       // lines | json
       reuseGroups: true,
+      collapseGroups: true,
       minGroupSize: 2,
       heuristicFallback: true,
       payloadMode: "title-url",  // title-url | title-host | title
@@ -242,7 +243,7 @@
     static async categorize(cfg, prompt, opts = {}) {
       if (!cfg.baseURL) throw new ProviderError("No base URL configured.");
       if (!cfg.model) throw new ProviderError("No model selected.", "Open Zen Settings → mods → AI Tab Sorter, click ⟳ Fetch Models and pick a model.");
-      const maxTokens = Math.max(256, (opts.tabCount || 16) * 16);
+      const maxTokens = Math.max(512, (opts.tabCount || 16) * 32);
       let url, headers, body;
 
       if (cfg.dialect === "ollama") {
@@ -323,27 +324,43 @@
       const tabLines = tabDataList
         .map((d, i) => `${i + 1}. ${this.payloadLine(d, cfg.payloadMode)}`)
         .join("\n");
-      const existing = (existingGroupLabels || []).length
-        ? `Existing groups (if a tab fits one of these, REUSE that EXACT name — do not create variations):\n${existingGroupLabels.map((n) => `- ${n}`).join("\n")}`
-        : "Existing groups: none yet.";
+      const existingNames = (existingGroupLabels || []).filter(Boolean);
+      const existing = existingNames.length
+        ? `EXISTING GROUPS (output one of these EXACT names when a tab fits): ${existingNames.join(", ")}`
+        : "EXISTING GROUPS: none yet — invent good names.";
 
       const rules = [
         this.GRANULARITY[cfg.granularity] || this.GRANULARITY[3],
-        "Consistency is critical: the same logical topic MUST get the identical name across all lines.",
-        "Category format: 1-2 words, Title Case (e.g. \"GitHub\", \"Web Dev\", \"News\").",
-        existing,
+        `1. ${existing}`,
+        '2. NEW NAMES: name a group after the shared site or topic. If several tabs share a domain, use that site\'s name (GitHub, YouTube, Stack Overflow). Otherwise use the shared topic (Python, Invoices, Trip Planning).',
+        "3. CONSISTENCY IS CRITICAL: the same logical topic MUST receive the identical name on every line.",
+        "4. FORMAT: 1-2 words, Title Case. NEVER echo these instructions, and never output sentences, URLs or tab titles as category names.",
       ];
+
+      const example = [
+        "Example —",
+        "Tabs:",
+        "1. Title: PR #42 fix login flow | Host: github.com",
+        "2. Title: Engineering Mechanics lecture 3 | Host: university.edu",
+        "3. Title: DIY welding basics | Host: youtube.com",
+        "4. Title: (1) cat compilations | Host: youtube.com",
+        "Correct output (lines mode):",
+        "GitHub",
+        "Coursework",
+        "YouTube",
+        "YouTube",
+      ].join("\n");
 
       let output;
       if (mode) {
         output = [
           `Output ONLY a JSON array with exactly ${tabDataList.length} entries, one per tab, in input order:`,
-          '[{"i":1,"c":"Category"}, {"i":2,"c":"Category"}, ...]',
+          '[{"i":1,"c":"GitHub"}, {"i":2,"c":"Coursework"}]',
           "No markdown, no code fences, no commentary — JSON only.",
         ].join("\n");
       } else {
         output = [
-          `Output EXACTLY ${tabDataList.length} lines — one category per line, in the same order as the tabs.`,
+          `Output EXACTLY ${tabDataList.length} lines — one category per line, line i is the category of tab i, same order as the input.`,
           "No numbering, no explanations, no markdown — just the category names.",
         ].join("\n");
       }
@@ -359,7 +376,8 @@
         "You are a precise tab organizer for a web browser. Categorize the numbered tabs below.",
         customSection,
         "Rules:",
-        ...rules.map((r) => `- ${r}`),
+        ...rules.map((r, i) => (i === 0 ? `- ${r}` : r)),
+        example,
         "Tabs:",
         tabLines,
         "Output:",
@@ -388,15 +406,21 @@
       s = s.replace(/^[-*•]\s*/, "");                    // bullets
       s = s.replace(/^\**|\**$/g, "");                   // **bold**
       s = s.replace(/^["'`]+|["'`]+$/g, "");             // quotes
-      s = s.replace(/^(category|group|topic|label)\s*[:-]\s*/i, "");
+      s = s.replace(/^(category|group|topic|label|title|tab|name)\s*[:-]\s*/i, "");
       s = s.replace(/[.\s]+$/, "");
       s = s.replace(/\s+/g, " ").trim();
       if (!s) return "";
       s = s.split(" ").slice(0, 4).join(" ");            // cap at 4 words
       if (s.length > 40) s = s.slice(0, 40).trim();
-      return s.replace(/\b\p{L}[\p{L}\p{N}'&.-]*/gu, (w) =>
+      const titled = s.replace(/\b\p{L}[\p{L}\p{N}'&.-]*/gu, (w) =>
         w.length <= 3 && w === w.toUpperCase() ? w : w.charAt(0).toUpperCase() + w.slice(1)
       );
+      // Instruction-echo junk from weak/reasoning models ("We Need To
+      // Categorize", "Thus Tabs 1-3 Are", "Output", …) → no answer at all,
+      // so the tab is simply left ungrouped instead of getting a garbage
+      // one-tab group.
+      if (/^(we |we\d|lets |let's|let us|thus|so |now |first|then|output|input|answer|here |the (tabs|following|user)|tab\b|title\b|note that|based on|to (do|categorize|output)|final answer)/i.test(titled)) return "";
+      return titled;
     }
 
     /**
@@ -522,7 +546,11 @@
       if (g && g.hasAttribute("split-view-group")) return false;
       try {
         const spec = tab.linkedBrowser?.currentURI?.spec || "";
-        if (/^(about|chrome|resource|moz-extension|file):/i.test(spec)) return false;
+        // Only truly internal chrome pages are skipped. Local files
+        // (file://) and reader-mode articles are REAL content — the user
+        // expects them to be grouped too.
+        if (/^(chrome|resource|moz-extension|data|blob):/i.test(spec)) return false;
+        if (/^about:(blank|newtab|new-tab|home|privatebrowsing|sessionrestore|welcome|session-history|profiling)\b/i.test(spec)) return false;
       } catch (_e) { /* unreadable URI — still sortable by title */ }
       return true;
     }
@@ -576,10 +604,16 @@
       let url = "", hostname = "";
       try {
         const spec = tab.linkedBrowser?.currentURI?.spec || "";
-        if (spec && !spec.startsWith("about:")) {
+        if (spec) {
           const u = new URL(spec);
           url = u.href;
           hostname = u.hostname;
+          if (u.protocol === "file:") {
+            // Local files: the filename is the "site" the model clusters on.
+            const base = decodeURIComponent(u.pathname.split("/").filter(Boolean).pop() || "")
+              .replace(/\.[a-z0-9]+$/i, "");
+            if (base) hostname = base;
+          }
         }
       } catch (_e) { /* keep empty */ }
       const clean = String(title).trim();
@@ -621,7 +655,8 @@
    * removeTabGroup; no invented APIs, everything verified working).
    * ══════════════════════════════════════════════════════════════ */
   class GroupingEngine {
-    static PALETTE = ["blue", "turquoise", "green", "yellow", "orange", "red", "pink", "purple"];
+    // Firefox/Zen's valid native tab-group color names (Darsh's set).
+    static PALETTE = ["blue", "cyan", "green", "yellow", "orange", "red", "pink", "purple", "gray"];
 
     static getGroupTabs(el) {
       try { return el.tabs ? [...el.tabs] : [...el.querySelectorAll("tab, .tabbrowser-tab")]; }
@@ -630,6 +665,27 @@
 
     static hasLiveTabs(el) {
       return this.getGroupTabs(el).some((t) => TabCollector.alive(t));
+    }
+
+    /** Expand a collapsed group (moving tabs into a collapsed group is
+     *  unreliable — Darsh expands first, so do we). */
+    static expand(el) {
+      try {
+        if (el.getAttribute("collapsed") === "true") {
+          el.setAttribute("collapsed", "false");
+          el.querySelector(".tab-group-label")?.setAttribute("aria-expanded", "true");
+        }
+      } catch (_e) { /* non-fatal */ }
+    }
+
+    /** Collapse a group for a tidy strip (only groups we manage). */
+    static collapse(el) {
+      try {
+        if (el.getAttribute("collapsed") !== "true") {
+          el.setAttribute("collapsed", "true");
+          el.querySelector(".tab-group-label")?.setAttribute("aria-expanded", "false");
+        }
+      } catch (_e) { /* non-fatal */ }
     }
 
     static dissolve(el, reason) {
@@ -753,6 +809,7 @@
         return color;
       };
 
+      const applied = new Map(); // normName → group el (for the collapse pass)
       const ordered = [...plan].sort((a, b) => b.tabs.length - a.tabs.length);
       for (const group of ordered) {
         const live = group.tabs.filter((t) => TabCollector.alive(t));
@@ -763,6 +820,7 @@
           // ── reuse in place: move in only the tabs not already here ──
           const toAdd = live.filter((tab) => tab.group !== el);
           if (toAdd.length) {
+            this.expand(el); // collapsed groups swallow addTabs silently
             try {
               el.addTabs(toAdd);
               stats.moved += toAdd.length;
@@ -770,12 +828,13 @@
             } catch (e) {
               log(`addTabs failed for "${group.name}":`, e?.message, "— creating a fresh group instead");
               const created = this.create(live, group.name, nextColor());
-              if (created) { stats.created++; } else { stats.skipped += live.length; }
+              if (created) { stats.created++; applied.set(group.name.toLowerCase(), created); } else { stats.skipped += live.length; }
             }
           } else {
             log(`group "${group.name}" already holds its tabs — nothing to move`);
           }
           stats.reused++;
+          applied.set(group.name.toLowerCase(), el);
           continue;
         }
 
@@ -788,10 +847,18 @@
         const created = this.create(live, group.name, nextColor());
         if (created) {
           stats.created++;
+          applied.set(group.name.toLowerCase(), created);
           log(`created group "${group.name}" (${live.length} tabs)`);
         } else {
           log(`FAILED to create group "${group.name}" (${live.length} tabs) — tabs left as-is`);
           stats.skipped += live.length;
+        }
+      }
+
+      // Post-pass: collapse everything we built for a tidy strip.
+      if (cfg.collapseGroups) {
+        for (const el of applied.values()) {
+          if (el?.isConnected) this.collapse(el);
         }
       }
 
@@ -916,6 +983,12 @@
     static CLEAR_CLASS = "zen-workspace-close-unpinned-tabs-button";
     static LABEL = "⇅ Sort";
     static TOOLTIP = "AI Tab Sorter — group the tabs of this workspace (multi-select tabs to sort only those)";
+    // Unique per script load: lets THIS load recognize its own twin and
+    // sweep away buttons left by a PREVIOUS load (Sine hot-rebuilds the mod
+    // on every pref change without unloading the old script — v0.1.2's
+    // injector kept re-adding its button at the old anchor, which is what
+    // made the Sort control "jump" between two positions).
+    static RUN = "ats" + Math.random().toString(36).slice(2, 8);
     static #watchers = false;
     static #statusTimer = null;
 
@@ -947,6 +1020,7 @@
     static build(clear) {
       const el = document.createElement(clear ? clear.tagName : "span");
       el.id = this.ID;
+      el.dataset.atsRun = this.RUN;
       el.textContent = this.LABEL;
       el.setAttribute("label", this.LABEL);
       el.setAttribute("tooltiptext", this.TOOLTIP);
@@ -969,6 +1043,20 @@
 
     static #btn() { return document.getElementById(this.ID); }
 
+    /** Remove any AI-Tab-Sorter button that does NOT belong to this load
+     *  (stale twins from a Sine hot-rebuild, v0.1.2 legacy buttons/panels).
+     *  Cheap: runs on mount + a slow interval, keeps exactly one button. */
+    static #sweep() {
+      try {
+        for (const el of document.querySelectorAll(
+          '[id^="ai-tab-sorter"], [data-ai-tab-sorter], .ai-tab-sorter-fallback, .ai-tab-sorter-panel'
+        )) {
+          if (el.dataset.atsRun === this.RUN) continue;
+          el.remove();
+        }
+      } catch (_e) { /* non-fatal */ }
+    }
+
     /** True when the twin exists AND sits immediately LEFT of the ACTIVE
      *  workspace's Clear control (a stale twin in another workspace does
      *  not count — workspace switches re-place it). */
@@ -984,6 +1072,7 @@
     }
 
     static placeTwin() {
+      this.#sweep();
       if (this.twinIsCurrent()) return true;
       const clear = this.clearControl();
       if (!clear?.parentElement) return false;
@@ -999,6 +1088,23 @@
       // Clear is hover-revealed on some builds — re-place on any mouseover
       // (cheap: placeTwin early-returns once the twin is current).
       document.documentElement.addEventListener("mouseover", () => this.placeTwin(), true);
+      // Zen re-renders the tabs strip constantly (group add/remove, labels) —
+      // watch it so the twin re-attaches instantly instead of waiting for a
+      // hover. Debounced to one frame.
+      try {
+        const strip = document.getElementById("tabbrowser-tabs");
+        if (strip) {
+          let queued = false;
+          new MutationObserver(() => {
+            if (queued) return;
+            queued = true;
+            requestAnimationFrame(() => { queued = false; this.placeTwin(); });
+          }).observe(strip, { childList: true, subtree: true });
+        }
+      } catch (_e) { /* hover watcher still covers us */ }
+      // Slow sweep: kills buttons re-added by an older script load until the
+      // browser is restarted (Sine hot-rebuild leaves old closures alive).
+      setInterval(() => this.#sweep(), 2500);
       // One <zen-workspace> per workspace; the twin must follow the active one.
       try {
         const zw = window.gZenWorkspaces;
@@ -1169,6 +1275,17 @@
       console.info(LOG_PREFIX, "model set to:", modelId);
     }
 
+    /** Find the main browser window and borrow its (CSP-free) fetch. */
+    static #viaMainWindow() {
+      try {
+        const wm = SVCS?.wm;
+        const win = wm?.getMostRecentWindow?.("navigator:browser")
+          || [...(wm?.enumerate?.("navigator:browser") || [])].find(Boolean);
+        if (win?.aiTabSorter?.providers?.listModels) return win.aiTabSorter.providers.listModels();
+      } catch (_e) { /* fall back to local fetch */ }
+      return null;
+    }
+
     static async #fetchModels() {
       const btn = document.getElementById(this.FETCH_BTN_ID);
       const ml = document.getElementById(this.MENULIST_ID);
@@ -1176,7 +1293,12 @@
       if (btn) btn.setAttribute("label", "Fetching…");
       if (btn) btn.setAttribute("disabled", "true");
       try {
-        const models = await ProviderHub.listModels();
+        // about:preferences ships a CSP of `default-src chrome:` which BLOCKS
+        // https:// fetches from this page. The main browser window has no
+        // such CSP (that's where sorting fetches from) — so ask IT to run
+        // the request for us. Falls back to a local fetch when no browser
+        // window is around.
+        const models = await (this.#viaMainWindow() ?? ProviderHub.listModels());
         PrefStore.set("modelList", JSON.stringify(models));
         if (ml?.isConnected) {
           const current = String(PrefStore.get("model") || "");

@@ -17,6 +17,8 @@ A [Zen Browser](https://zen-browser.app) mod (works with the [Sine](https://gith
   - **Cloud:** OpenAI, OpenRouter, Groq, Together, Mistral, Google Gemini
   - **Custom:** any base URL speaking the OpenAI-compatible protocol
 - **⟳ Fetch Models + model dropdown in the settings panel** — live-queries your provider's model-list endpoint (`/v1/models`, Ollama `/api/tags`, Gemini `/v1beta/models`) so you never type model names by hand.
+- **🎨 Colored, auto-collapsed groups** — every group the sort builds gets one of Zen's native tab-group colors (blue, cyan, green, yellow, orange, red, pink, purple, gray) and collapses for a tidy strip (toggle: *Collapse groups after sorting*). Reused groups keep their color and position.
+- **📁 Local files count too** — `file://` documents and reader pages are clustered (on their filename/topic); only internal chrome pages are skipped.
 - **♻️ Group reuse** — the AI is told about your existing groups and reuses their exact names instead of spawning near-duplicates.
 - **🛟 Offline fallback** — optional no-AI heuristic grouping (domain + keyword clustering) when the provider is unreachable.
 - **🔒 Privacy modes** — send title+URL, title+hostname, or title only. Defaults to a local runtime.

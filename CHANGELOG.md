@@ -3,6 +3,46 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.1.4] — 2026-08-29
+
+The "make it look good" release: colors, collapsing, a stronger prompt, and fixes
+for every issue reported from live v0.1.3 console logs.
+
+### Added
+- **Group colors** — new groups rotate through Firefox's valid native tab-group
+  colors (`blue, cyan, green, yellow, orange, red, pink, purple, gray`; the old
+  `turquoise` is not a valid color name and silently fell back to default).
+  Reused groups keep their existing color. Pattern taken from working mods.
+- **Auto-collapse after sorting** — new `mod.aitabsort.collapseGroups` pref
+  (default on): every group the sort built/reused ends collapsed for a tidy
+  strip, exactly like the classic AI groupers. Groups are temporarily expanded
+  before `addTabs()` (moving tabs into a collapsed group is unreliable).
+- **Much stronger prompt** — Darsh-style numbered rules: EXACT reuse of existing
+  group names (no "Project Docs" → "Project Documentation" variations),
+  domain-first naming for new groups (GitHub, YouTube, …), strict 1–2 word
+  Title-Case format, plus a few-shot example block. Junk answers that echo the
+  instructions ("We Need To Categorize", "Thus Tabs 1-3 Are", …) are filtered
+  out by the response parser instead of becoming one-tab garbage groups.
+
+### Fixed
+- **Fetch Models was blocked by CSP in the settings page** (`connect-src …
+  default-src chrome:` on about:preferences): the settings page now borrows the
+  main browser window's fetch (where sorting already talks to providers) via
+  `Services.wm.getMostRecentWindow("navigator:browser")` and only falls back to
+  a local fetch.
+- **Local files (`file://`) and most `about:` pages were never sent to the
+  model** — the collector excluded them outright. Only truly internal pages
+  (`chrome:`, `resource:`, `moz-extension:`, `data:`, `blob:`, and empty
+  about: pages) are skipped now; local files are clustered on their filename.
+- **Sort button flickering/jumping between two positions**: Sine hot-rebuilds
+  the mod on every pref change WITHOUT unloading the old script, so v0.1.2's
+  injector kept re-adding its button at the old anchor while v0.1.3 placed the
+  twin beside Clear — the two fought constantly. Every script load now tags its
+  own button with a run token and sweeps untagged/foreign AI-Tab-Sorter
+  elements on mount, on strip mutations, and on a slow interval. A full restart
+  still clears the last zombie permanently.
+- Bigger completion budget (`max(512, 32/tab)` — weak models were truncating).
+
 ## [0.1.3] — 2026-08-29
 
 Rebuilt on patterns copied from working Zen mods ("tidy" in particular). This is the

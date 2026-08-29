@@ -92,9 +92,10 @@ const CFG = {
 test("prompt embeds existing groups with exact-reuse rule", () => {
   const p = PromptBuilder.build([{ title: "PR 123", hostname: "github.com", url: "https://github.com/x/pull/123" }],
     ["Research", "Dev"], CFG);
-  assert.ok(p.includes("- Research"));
-  assert.ok(p.includes("- Dev"));
-  assert.ok(p.toLowerCase().includes("exact"));
+  assert.ok(p.includes("Research"));
+  assert.ok(p.includes("Dev"));
+  assert.ok(p.includes("EXACT"));
+  assert.ok(p.includes("Example")); // few-shot block present
 });
 
 test("prompt respects payload privacy modes", () => {
@@ -128,7 +129,8 @@ test("custom prompt with placeholders substitutes; plain text is appended", () =
   const withPh = PromptBuilder.build([{ title: "A", hostname: "a.com", url: "u" }], ["G1"],
     { ...CFG, customPrompt: "CATS:{TAB_DATA_LIST}|GROUPS:{EXISTING_CATEGORIES_LIST}" });
   assert.ok(withPh.includes("CATS:1. Title: A"));
-  assert.ok(withPh.includes("|GROUPS:Existing groups (if a tab fits"));
+  assert.ok(withPh.includes("|GROUPS:EXISTING GROUPS"));
+  assert.ok(!withPh.includes("{TAB_DATA_LIST}"));
   const plain = PromptBuilder.build([{ title: "A", hostname: "a.com", url: "u" }], [], { ...CFG, customPrompt: "Always answer in English." });
   assert.ok(plain.includes("Always answer in English."));
 });
@@ -159,6 +161,18 @@ test("normalizeCategory caps runaway labels", () => {
   const long = ResponseParser.normalizeCategory("one two three four five six seven eight");
   assert.ok(long.split(" ").length <= 4);
   assert.ok(long.length <= 40);
+});
+
+test("normalizeCategory filters instruction-echo junk from weak models", () => {
+  assert.equal(ResponseParser.normalizeCategory("We Need To Categorize"), "");
+  assert.equal(ResponseParser.normalizeCategory("We Have 10 Tabs."), "");
+  assert.equal(ResponseParser.normalizeCategory("Thus Tabs 1-3 Are Grouped"), "");
+  assert.equal(ResponseParser.normalizeCategory("Let's Examine Each Tab"), "");
+  assert.equal(ResponseParser.normalizeCategory("Output"), "");
+  assert.equal(ResponseParser.normalizeCategory("Final Answer"), "");
+  // Legit categories that merely START with tricky words must survive.
+  assert.equal(ResponseParser.normalizeCategory("Web Dev"), "Web Dev");
+  assert.equal(ResponseParser.normalizeCategory("Sochi Olympics"), "Sochi Olympics");
 });
 
 /* ── ResponseParser.parseLines repair ladder ────────────────── */

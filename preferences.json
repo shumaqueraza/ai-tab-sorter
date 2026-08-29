@@ -55,6 +55,12 @@
     "default": "true"
   },
   {
+    "property": "mod.aitabsort.collapseGroups",
+    "type": "checkbox",
+    "label": "Collapse groups after sorting (tidy strip)",
+    "default": "true"
+  },
+  {
     "property": "mod.aitabsort.heuristicFallback",
     "type": "checkbox",
     "label": "Fall back to offline (no-AI) grouping when the provider is unreachable",
