@@ -17,6 +17,8 @@ A [Zen Browser](https://zen-browser.app) mod (works with the [Sine](https://gith
   - **Cloud:** OpenAI, OpenRouter, Groq, Together, Mistral, Google Gemini
   - **Custom:** any base URL speaking the OpenAI-compatible protocol
 - **⟳ Fetch Models + model dropdown in the settings panel** — live-queries your provider's model-list endpoint (`/v1/models`, Ollama `/api/tags`, Gemini `/v1beta/models`) so you never type model names by hand.
+- **🧠 Concept-first grouping** — tabs are grouped by what they're FOR (project, subject, task), never by website: a YouTube lecture, a course PDF and its GitHub repo land in the same group. The AI sees title + host + URL path + page description as evidence.
+- **🌳 Two-level groups** — `Topic / Detail` names (`Engineering Mechanics / Lectures`, `… / Problem Sets`) with siblings created adjacently — hierarchical organization on Firefox's flat group model.
 - **🎨 Colored, auto-collapsed groups** — every group the sort builds gets one of Zen's native tab-group colors (blue, cyan, green, yellow, orange, red, pink, purple, gray) and collapses for a tidy strip (toggle: *Collapse groups after sorting*). Reused groups keep their color and position.
 - **📁 Local files count too** — `file://` documents and reader pages are clustered (on their filename/topic); only internal chrome pages are skipped.
 - **♻️ Group reuse** — the AI is told about your existing groups and reuses their exact names instead of spawning near-duplicates.

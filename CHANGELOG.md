@@ -3,6 +3,32 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.1.5] — 2026-08-29
+
+The "professional prompting" release: groups follow meaning, not websites.
+
+### Changed
+- **Concept-first grouping** — the prompt was rewritten as a professional
+  knowledge-organizer brief: group tabs by what they are FOR (the project,
+  subject, task), never by website. Bare site names ("GitHub", "Chatgpt",
+  "Youtube", "Pdf") are explicitly forbidden unless the tabs are about that
+  site itself. The old prompt literally instructed the model to prefer domain
+  names — that's why the groups came out generic.
+- **Two-level group names** — the model now outputs `Topic / Detail`
+  (e.g. `Engineering Mechanics / Lectures`,
+  `Engineering Mechanics / Problem Sets`) when a topic has enough tabs to
+  split, plain `Topic` otherwise. Sibling groups share the identical Topic
+  spelling and are created in name order, so related groups sit adjacent —
+  the closest thing to nested groups Firefox's flat tab-group model allows.
+- **Full tab context** — each tab now carries its meta description
+  (`meta[name=description]` / `og:description`, best effort, 160 chars) in the
+  default privacy mode, exactly like the classic mod did. The URL path is
+  presented as *evidence of the subject* (`github.com/x/mechanics-solutions`
+  → "Engineering Mechanics / Solutions"), not as a label. Privacy modes
+  (title+hostname / title-only) drop the URL and description entirely.
+- Junk filter tightened so real names like "Tab Management" or "First Aid Kit"
+  survive while instruction echoes ("We Need To Categorize") are still dropped.
+
 ## [0.1.4] — 2026-08-29
 
 The "make it look good" release: colors, collapsing, a stronger prompt, and fixes

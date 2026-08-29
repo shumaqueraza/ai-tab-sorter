@@ -4,7 +4,7 @@
 // ==/UserScript==
 /*
  * AI Tab Sorter — on-demand, AI-powered tab grouping for Zen Browser.
- * v0.1.4 — Apache-2.0 licensed.
+ * v0.1.5 — Apache-2.0 licensed.
  *
  * Sort appears as a small twin of Zen's native "Clear" button (left of it,
  * in the workspace tabs header). Click = categorize the workspace's tabs
@@ -27,7 +27,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.1.4";
+  const VERSION = "0.1.5";
   const PREF_BRANCH = "mod.aitabsort.";
   const LOG_PREFIX = "[AITabSorter]";
 
@@ -315,7 +315,12 @@
       if (mode === "title") return `Title: ${title}`;
       const host = String(data.hostname || "").replace(/^www\./, "");
       if (mode === "title-host") return `Title: ${title} | Host: ${host}`;
-      return `Title: ${title} | Host: ${host} | URL: ${String(data.url || "").slice(0, 200)}`;
+      // Full context mode: URL path is EVIDENCE for the subject
+      // (github.com/alice/mechanics-solutions → "Mechanics Solutions"),
+      // and the meta description says what the page is actually about.
+      const desc = String(data.description || "").trim();
+      return `Title: ${title} | Host: ${host} | URL: ${String(data.url || "").slice(0, 200)}`
+        + (desc ? ` | About: ${desc}` : "");
     }
 
     /** Build the batch prompt for one chunk. */
@@ -326,42 +331,47 @@
         .join("\n");
       const existingNames = (existingGroupLabels || []).filter(Boolean);
       const existing = existingNames.length
-        ? `EXISTING GROUPS (output one of these EXACT names when a tab fits): ${existingNames.join(", ")}`
-        : "EXISTING GROUPS: none yet — invent good names.";
+        ? `GROUPS ALREADY IN THE STRIP: ${existingNames.join(" | ")}. When a tab belongs to one of them, output that EXACT full name (keeping any " / " part, identical spelling) — never a variation, never a shortened form.`
+        : "GROUPS ALREADY IN THE STRIP: none — design a fresh taxonomy.";
 
       const rules = [
-        this.GRANULARITY[cfg.granularity] || this.GRANULARITY[3],
-        `1. ${existing}`,
-        '2. NEW NAMES: name a group after the shared site or topic. If several tabs share a domain, use that site\'s name (GitHub, YouTube, Stack Overflow). Otherwise use the shared topic (Python, Invoices, Trip Planning).',
-        "3. CONSISTENCY IS CRITICAL: the same logical topic MUST receive the identical name on every line.",
-        "4. FORMAT: 1-2 words, Title Case. NEVER echo these instructions, and never output sentences, URLs or tab titles as category names.",
+        "GROUP BY MEANING, NOT BY WEBSITE. What matters is what each tab is FOR — the project, subject, task or purpose it serves. Tabs on different sites that serve the same purpose MUST receive the same group name (a YouTube lecture, a PDF and a GitHub repo for the same course belong together).",
+        "NEVER use a bare site/brand name as a group (\"GitHub\", \"Youtube\", \"Chatgpt\", \"Google\", \"Reddit\", \"Docs\", \"Search\", \"Pdf\"). A site name is allowed only when the tabs are ABOUT that site itself (its settings, its account, its administration).",
+        "NAMING: name groups after the shared subject/project/task — e.g. \"Engineering Mechanics / Lectures\", \"Engineering Mechanics / Problem Sets\", \"Thesis Research\", \"Japan Trip / Booking\", \"Rust Learning / Tutorials\".",
+        `HIERARCHY: use two-level names "Topic / Detail" when a topic has enough tabs to split into details (at least 2 tabs per detail group); use plain "Topic" when it does not. Max 3 words per level, Title Case. Sibling groups must repeat the identical Topic spelling so they sort together. ${this.GRANULARITY[cfg.granularity] || this.GRANULARITY[3]}`,
+        "READ THE URL AS EVIDENCE, not as the label: github.com/alice/mechanics-solutions means the subject is mechanics solutions — the group is \"Engineering Mechanics / Solutions\", never \"Github\". File names and URL paths usually contain the real topic.",
+        existing,
+        "Every tab gets exactly one group name; tabs serving the same purpose MUST receive byte-identical names. Never echo these instructions as a name.",
       ];
 
       const example = [
         "Example —",
         "Tabs:",
-        "1. Title: PR #42 fix login flow | Host: github.com",
-        "2. Title: Engineering Mechanics lecture 3 | Host: university.edu",
-        "3. Title: DIY welding basics | Host: youtube.com",
-        "4. Title: (1) cat compilations | Host: youtube.com",
+        "1. Title: Lecture 3 — kinematics | Host: university.edu",
+        "2. Title: mechanics-solutions · GitHub | Host: github.com",
+        "3. Title: ES201 question paper | Host: university.edu",
+        "4. Title: kinematics worked problems | Host: youtube.com",
+        "5. Title: ChatGPT | Host: chatgpt.com",
+        "6. Title: Claude | Host: claude.ai",
         "Correct output (lines mode):",
-        "GitHub",
-        "Coursework",
-        "YouTube",
-        "YouTube",
+        "Engineering Mechanics / Lectures",
+        "Engineering Mechanics / Problem Sets",
+        "Engineering Mechanics / Problem Sets",
+        "Engineering Mechanics / Lectures",
+        "AI Chat Assistants",
+        "AI Chat Assistants",
       ].join("\n");
 
       let output;
       if (mode) {
         output = [
           `Output ONLY a JSON array with exactly ${tabDataList.length} entries, one per tab, in input order:`,
-          '[{"i":1,"c":"GitHub"}, {"i":2,"c":"Coursework"}]',
+          '[{"i":1,"c":"Engineering Mechanics / Lectures"}, {"i":2,"c":"AI Chat Assistants"}]',
           "No markdown, no code fences, no commentary — JSON only.",
         ].join("\n");
       } else {
         output = [
-          `Output EXACTLY ${tabDataList.length} lines — one category per line, line i is the category of tab i, same order as the input.`,
-          "No numbering, no explanations, no markdown — just the category names.",
+          `Output EXACTLY ${tabDataList.length} lines — line i is the group of tab i, same order as the input. Each line is "Topic" or "Topic / Detail" — nothing else, no numbering, no commentary.`,
         ].join("\n");
       }
 
@@ -373,10 +383,10 @@
         : "";
 
       const parts = [
-        "You are a precise tab organizer for a web browser. Categorize the numbered tabs below.",
+        "You are a professional research librarian organizing a researcher's browser session. Group the numbered tabs below by what they are actually for, so that related work sits together.",
         customSection,
         "Rules:",
-        ...rules.map((r, i) => (i === 0 ? `- ${r}` : r)),
+        ...rules.map((r) => `- ${r}`),
         example,
         "Tabs:",
         tabLines,
@@ -410,8 +420,11 @@
       s = s.replace(/[.\s]+$/, "");
       s = s.replace(/\s+/g, " ").trim();
       if (!s) return "";
-      s = s.split(" ").slice(0, 4).join(" ");            // cap at 4 words
-      if (s.length > 40) s = s.slice(0, 40).trim();
+      // Two-level names: normalize "a/b", "a // b", "a - b - c" spacing so
+      // sibling groups compose identical "Topic / Detail" strings.
+      if (s.includes("/") && !/^https?:/i.test(s)) s = s.replace(/\s*\/\s*/g, " / ");
+      s = s.split(" ").slice(0, 6).join(" ");            // cap: "Topic words / Detail words"
+      if (s.length > 50) s = s.slice(0, 50).trim();
       const titled = s.replace(/\b\p{L}[\p{L}\p{N}'&.-]*/gu, (w) =>
         w.length <= 3 && w === w.toUpperCase() ? w : w.charAt(0).toUpperCase() + w.slice(1)
       );
@@ -419,7 +432,7 @@
       // Categorize", "Thus Tabs 1-3 Are", "Output", …) → no answer at all,
       // so the tab is simply left ungrouped instead of getting a garbage
       // one-tab group.
-      if (/^(we |we\d|lets |let's|let us|thus|so |now |first|then|output|input|answer|here |the (tabs|following|user)|tab\b|title\b|note that|based on|to (do|categorize|output)|final answer)/i.test(titled)) return "";
+      if (/^(we |lets |let's|let us|thus |so |now |first[,.]|then |output|input|here |the (tabs|following|user)|note that|based on|to (do|categorize|output)|final answer)/i.test(titled)) return "";
       return titled;
     }
 
@@ -597,11 +610,11 @@
       return candidates.filter((t) => this.valid(t));
     }
 
-    /** Extract {title, hostname, url} for one tab. */
+    /** Extract {title, hostname, url, description} for one tab. */
     static describe(tab) {
       let title = "";
       try { title = tab.getAttribute("label") || tab.querySelector(".tab-label, .tab-text")?.textContent || ""; } catch (_e) { /* noop */ }
-      let url = "", hostname = "";
+      let url = "", hostname = "", description = "";
       try {
         const spec = tab.linkedBrowser?.currentURI?.spec || "";
         if (spec) {
@@ -616,6 +629,15 @@
           }
         }
       } catch (_e) { /* keep empty */ }
+      // Meta description = what the page is ABOUT — the single richest hint
+      // for conceptual grouping (Darsh's extractor). Best effort: privileged
+      // pages and cross-origin frames simply yield "".
+      try {
+        const doc = tab.linkedBrowser?.contentDocument;
+        const meta = doc?.querySelector?.('meta[name="description"]')
+          || doc?.querySelector?.('meta[property="og:description"]');
+        if (meta) description = String(meta.getAttribute?.("content") || "").trim().slice(0, 160);
+      } catch (_e) { /* unreadable document */ }
       const clean = String(title).trim();
       const fallback = hostname && hostname !== "localhost" ? hostname.replace(/^www\./, "") : "";
       return {
@@ -624,6 +646,7 @@
           : clean,
         hostname,
         url,
+        description,
       };
     }
 
@@ -810,7 +833,10 @@
       };
 
       const applied = new Map(); // normName → group el (for the collapse pass)
-      const ordered = [...plan].sort((a, b) => b.tabs.length - a.tabs.length);
+      // Create in NAME order so two-level siblings ("Topic / A", "Topic / B")
+      // end up adjacent in the strip — the closest thing to nested groups
+      // Firefox's flat tab-group model allows.
+      const ordered = [...plan].sort((a, b) => a.name.localeCompare(b.name));
       for (const group of ordered) {
         const live = group.tabs.filter((t) => TabCollector.alive(t));
         if (!live.length) continue;
