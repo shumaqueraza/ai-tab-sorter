@@ -27,9 +27,29 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.1.7";
+  const VERSION = "0.1.8";
   const PREF_BRANCH = "mod.aitabsort.";
   const LOG_PREFIX = "[AITabSorter]";
+
+  /* ── Load handoff (zombie control) ───────────────────────────
+   * Sine hot-rebuilds this mod on every pref change WITHOUT unloading
+   * the previous script. Two live loads then fight over the Sort
+   * button (each sweep deletes the other's twin; both remount —
+   * observed live as 700+ remount cycles), and clicks die because the
+   * node is swapped mid-click. Fix: each load registers a die() on the
+   * window; a NEWER load invokes it immediately — the older load sets
+   * its DEAD flag, stops mounting, and self-clears its timers/elements.
+   * (Separate windows — browser vs about:preferences — each keep their
+   * own registry, so a prefs-page load never kills a browser-window
+   * load and vice versa.) */
+  const HANDOFF_KEY = "__aiTabSorterDie";
+  let DEAD = false;
+  function registerLoad() {
+    try { if (typeof window === "object" && typeof window[HANDOFF_KEY] === "function") window[HANDOFF_KEY](); }
+    catch (_e) { /* broken older load — its sweep will be handled by ours */ }
+    try { if (typeof window === "object") window[HANDOFF_KEY] = () => { DEAD = true; }; }
+    catch (_e) { /* non-window context (Node test seam) */ }
+  }
 
   // Sine renders its mod-preferences UI inside the about:preferences tab
   // (and, on some builds, a chrome:// preferences window). Match both.
@@ -921,14 +941,27 @@
    * ══════════════════════════════════════════════════════════════ */
   class SortController {
     static #sorting = false;
+    static #sortStartedAt = 0;
     static isSorting() { return this.#sorting; }
+
+    /** Watchdog: a stalled provider must not brick the button until the
+     *  next restart. Frees #sorting once timeout + grace has elapsed. */
+    static forceReleaseIfStuck() {
+      if (!this.#sorting) return false;
+      const limit = ((Number(PrefStore.get("timeoutSec")) || 120) + 15) * 1000;
+      if (Date.now() - this.#sortStartedAt < limit) return false;
+      this.#sorting = false;
+      SortButton.setSorting(false);
+      log("watchdog: released a stuck sort — the provider never answered");
+      return true;
+    }
 
     static capability() {
       return typeof gBrowser !== "undefined" && typeof gBrowser.addTabGroup === "function";
     }
 
     static async sort() {
-      if (this.#sorting) { log("sort already running"); return; }
+      if (this.#sorting && !this.forceReleaseIfStuck()) { log("sort already running"); return; }
       if (!this.capability()) {
         SortButton.setStatus("err", "This Zen build has no tab-group API — cannot sort", 6000);
         return;
@@ -940,6 +973,7 @@
       }
 
       this.#sorting = true;
+      this.#sortStartedAt = Date.now();
       SortButton.setSorting(true, tabs.length);
       const t0 = Date.now();
       try {
@@ -1038,6 +1072,7 @@
     static RUN = "ats" + Math.random().toString(36).slice(2, 8);
     static #watchers = false;
     static #statusTimer = null;
+    static #sweepTimer = null;
 
     /** Zen's native "Clear" control. Fast path: its known class inside the
      *  active workspace. Fallback: text/label/tooltiptext scan (tidy). */
@@ -1079,6 +1114,7 @@
         el.dataset.twin = "1";
       }
       const sort = (e) => {
+        if (DEAD) return; // superseded by a newer script load
         e.preventDefault();
         e.stopPropagation();
         SortController.sort();
@@ -1094,6 +1130,7 @@
      *  (stale twins from a Sine hot-rebuild, v0.1.2 legacy buttons/panels).
      *  Cheap: runs on mount + a slow interval, keeps exactly one button. */
     static #sweep() {
+      if (DEAD) return;
       try {
         for (const el of document.querySelectorAll(
           '[id^="ai-tab-sorter"], [data-ai-tab-sorter], .ai-tab-sorter-fallback, .ai-tab-sorter-panel'
@@ -1119,6 +1156,7 @@
     }
 
     static placeTwin() {
+      if (DEAD) return false;
       this.#sweep();
       if (this.twinIsCurrent()) return true;
       const clear = this.clearControl();
@@ -1134,7 +1172,7 @@
       this.#watchers = true;
       // Clear is hover-revealed on some builds — re-place on any mouseover
       // (cheap: placeTwin early-returns once the twin is current).
-      document.documentElement.addEventListener("mouseover", () => this.placeTwin(), true);
+      document.documentElement.addEventListener("mouseover", () => { if (!DEAD) this.placeTwin(); }, true);
       // Zen re-renders the tabs strip constantly (group add/remove, labels) —
       // watch it so the twin re-attaches instantly instead of waiting for a
       // hover. Debounced to one frame.
@@ -1145,18 +1183,26 @@
           new MutationObserver(() => {
             if (queued) return;
             queued = true;
-            requestAnimationFrame(() => { queued = false; this.placeTwin(); });
+            requestAnimationFrame(() => { queued = false; if (!DEAD) this.placeTwin(); });
           }).observe(strip, { childList: true, subtree: true });
         }
       } catch (_e) { /* hover watcher still covers us */ }
       // Slow sweep: kills buttons re-added by an older script load until the
       // browser is restarted (Sine hot-rebuild leaves old closures alive).
-      setInterval(() => this.#sweep(), 2500);
+      this.#sweepTimer = setInterval(() => {
+        if (DEAD) { // superseded: full self-removal, then stop ticking
+          clearInterval(this.#sweepTimer);
+          this.#btn()?.remove();
+          return;
+        }
+        this.#sweep();
+        SortController.forceReleaseIfStuck();
+      }, 2500);
       // One <zen-workspace> per workspace; the twin must follow the active one.
       try {
         const zw = window.gZenWorkspaces;
         if (typeof zw?.addChangeListeners === "function") {
-          zw.addChangeListeners(() => this.placeTwin(), { once: false });
+          zw.addChangeListeners(() => { if (!DEAD) this.placeTwin(); }, { once: false });
         }
       } catch (e) { log("workspace watcher failed:", e?.message); }
     }
@@ -1232,6 +1278,14 @@
     }
 
     static #scan() {
+      if (DEAD) { // superseded by a newer load in this document
+        clearInterval(this.#timer);
+        try {
+          document.getElementById(this.MENULIST_ID)?.remove();
+          document.getElementById(this.FETCH_BTN_ID)?.remove();
+        } catch (_e) { /* non-fatal */ }
+        return;
+      }
       const row = document.getElementById(this.MODEL_ROW);
       if (row && row.isConnected && !row.querySelector("#" + this.MENULIST_ID)) {
         this.#enhanceModelRow(row);
@@ -1416,6 +1470,7 @@
 
     static async init() {
       if (typeof document === "undefined") return; // Node unit-test context
+      registerLoad(); // kill any older load of this mod in this window
       if (IS_PREFS) {
         // Settings page: no tab strip — enhance the Sine prefs panel only.
         globalThis.aiTabSorter = { version: VERSION, prefs: PrefStore, providers: ProviderHub };

@@ -3,6 +3,30 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.1.8] — 2026-08-29
+
+The "no more zombies" release: the Sort button keeps working for the whole
+session, no restart needed.
+
+### Fixed
+- **Sort button stopped registering clicks after a while** (needed a Zen
+  restart to recover). Root cause: Sine hot-rebuilds the mod on every
+  preference change WITHOUT unloading the previous script — two live copies
+  then fought over the button (each copy's sweep deleted the other's twin,
+  both re-mounted; one session showed 700+ re-mount cycles), so clicks kept
+  landing on a node that was swapped out mid-click. New **load-handoff**
+  protocol: every load registers a `die()` on its window, and a newer load
+  invokes it immediately — the older load raises its DEAD flag, stops
+  mounting, clears its timers, removes its button (and, in the settings
+  page, its dropdown/Fetch controls), and its watchers become no-ops.
+  Browser window and settings page keep separate registries, so one never
+  kills the other.
+- **Stuck-sort watchdog** — a provider that accepts the request but never
+  answers used to leave the button in "Sorting…" (and clicks answered
+  "sort already running") until the timeout eventually fired. The watchdog
+  (timeout + 15s) now force-releases the lock, restores the button, and
+  logs the event, so one hung request can no longer brick the session.
+
 ## [0.1.7] — 2026-08-29
 
 The "flat and honest" release: two-level names removed, prompt hardened
