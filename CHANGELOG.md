@@ -3,6 +3,49 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.1.3] — 2026-08-29
+
+Rebuilt on patterns copied from working Zen mods ("tidy" in particular). This is the
+version where placement, settings UI and the grouping engine all match native behavior.
+
+### Fixed
+- **Sorting did nothing** (`moved: 0, created: 0 … skipped: N`): the engine called
+  `gBrowser.moveTabToGroup()` — an API that does not exist in Zen. The engine now uses
+  the verified native path used by working mods: `gBrowser.ungroupTab()` →
+  `gBrowser.addTabGroup(members, {label, color, insertBefore})` (three option shapes
+  tried) → `groupEl.addTabs(tabs)` → `gBrowser.removeTabGroup(el)` for abandoned/empty
+  groups. In-place reconcile: groups whose name survives keep position + color, only
+  changed tabs move, abandoned groups dissolve without the stacked-husk flicker.
+- **Sort button was a big block away from Clear**: it is now a *twin* of Zen's native
+  Clear control — same tag, same classes (minus `zen-workspace-close-unpinned-tabs-button`,
+  which must stay unique or Zen's own lookup steals Clear's styling), inserted directly
+  to Clear's LEFT: `⇅ Sort | Clear`. Clear is hover-revealed on some builds, so a
+  mouseover watcher re-places the twin the moment Clear appears, and a workspace-change
+  listener moves it into the active workspace.
+- **⚙ settings button removed** — Sine already renders all settings in Zen Settings;
+  a second entry point in the tab strip was redundant noise. The tab strip now contains
+  exactly one addition: the Sort twin.
+- **Fetch Models / model dropdown never appeared in the settings panel** — two root
+  causes: (1) Sine renders pref rows with dots replaced by dashes (`#mod-aitabsort-model`,
+  not `#mod.aitabsort.model`), so the enhancer's lookup never matched; (2) the script
+  never ran in the settings page at all, because Sine's settings UI lives in the
+  `about:preferences` tab, not `chrome://…/preferences.xhtml`. The include list now
+  matches `about:preferences.*`, the enhancer targets the dashed id, scans forever
+  (Sine wipes + rebuilds the mods list on every pref change), and builds the dropdown
+  + button purely with `createXULElement` — no `innerHTML`, so the chrome sanitizer
+  can never shred it (the v0.1.2 `Removing unsafe node: select/input/button` spam and
+  the `providerSel is null` crash are gone with the removed panel).
+- **All normal tabs of the workspace are now sorted** (previously only ungrouped tabs
+  were candidates and grouped ones were silently skipped); multi-selecting tabs still
+  sorts only the selection.
+- Provider preset changes now auto-sync the base URL to the preset default (unless a
+  custom URL was set), directly inside the settings panel.
+
+### Removed
+- The ⚙ popup settings panel and its gear button (all settings live in the Sine panel).
+- The strip-bottom / periphery fallback button placements (the twin pattern makes them
+  unnecessary; a button floating at the bottom of the tab strip was the wrong UX).
+
 ## [0.1.2] — 2026-08-29
 
 First fully-working release on a real machine (validated on Zen + Sine 2.x, Windows).

@@ -7,27 +7,25 @@
 [![Zen Mod](https://img.shields.io/badge/Zen-Browser%20Mod-7c3aed)](https://zen-browser.app/)
 [![Sine](https://img.shields.io/badge/Sine-compatible-0ea5e9)](https://github.com/CosmoCreeper/Sine)
 
-A [Zen Browser](https://zen-browser.app) mod (works with the [Sine](https://github.com/CosmoCreeper/Sine) mod manager) that adds a **⇅ Sort button above your tabs**. Click it and your open tabs are categorized by an LLM and organized into tab groups — **strictly on demand**, never in the background.
+A [Zen Browser](https://zen-browser.app) mod (works with the [Sine](https://github.com/CosmoCreeper/Sine) mod manager) that adds a **⇅ Sort button beside the Clear button** in your workspace tabs header (`⇅ Sort | Clear`). Click it and your open tabs are categorized by an LLM and organized into native tab groups — **strictly on demand**, never in the background.
 
 ## ✨ Features
 
-- **🖱️ One-click sorting** — a native-looking Sort button in the tab strip. Multi-select tabs to sort only your selection.
+- **🖱️ One-click sorting** — a twin of Zen's native *Clear* control, sitting right beside it in the workspace header. Multi-select tabs to sort only your selection.
 - **🔌 Any provider, fully customizable** — local first, cloud when you want it:
   - **Local:** Ollama, LM Studio, llama.cpp server (and any OpenAI-compatible local server)
   - **Cloud:** OpenAI, OpenRouter, Groq, Together, Mistral, Google Gemini
   - **Custom:** any base URL speaking the OpenAI-compatible protocol
-- **⟳ Fetch Models button** — live-queries your provider's model-list endpoint (`/v1/models`, Ollama `/api/tags`, Gemini `/v1beta/models`) so you never type model names by hand.
-- **▾ Model selector dropdown** — pick from the fetched list; your choice is remembered.
+- **⟳ Fetch Models + model dropdown in the settings panel** — live-queries your provider's model-list endpoint (`/v1/models`, Ollama `/api/tags`, Gemini `/v1beta/models`) so you never type model names by hand.
 - **♻️ Group reuse** — the AI is told about your existing groups and reuses their exact names instead of spawning near-duplicates.
 - **🛟 Offline fallback** — optional no-AI heuristic grouping (domain + keyword clustering) when the provider is unreachable.
-- **🔒 Privacy modes** — send title+URL, title+hostname, or title only. Defaults to a local runtime; the panel always shows exactly where data would go.
-- **🧩 Built on [Advanced Tab Groups](https://github.com/Vertex-Mods/Advanced-Tab-Groups)** — the best tab-groups experience for Zen provides the group UI; this mod provides the brain.
+- **🔒 Privacy modes** — send title+URL, title+hostname, or title only. Defaults to a local runtime.
+- **🧩 Native Zen tab groups** — creates and reconciles groups through Zen's own `addTabGroup` / `addTabs` / `ungroupTab` APIs (the same verified path used by working Zen mods); works great alongside [Advanced Tab Groups](https://github.com/Vertex-Mods/Advanced-Tab-Groups).
 
 ## 📦 Requirements
 
 | Dependency | Why |
 |---|---|
-| [Advanced Tab Groups](https://github.com/Vertex-Mods/Advanced-Tab-Groups) | Provides the tab-groups UI & engine in Zen |
 | [Sine](https://github.com/CosmoCreeper/Sine) *(recommended)* or fx-autoconfig | Loads the mod |
 | An AI provider — e.g. free local [Ollama](https://ollama.com) | Does the categorization |
 
@@ -38,7 +36,7 @@ A [Zen Browser](https://zen-browser.app) mod (works with the [Sine](https://gith
 > **Full step-by-step (with screenshots-worthy detail): [TESTING.md](TESTING.md)**
 
 ### Via Sine (recommended)
-1. Install [Sine](https://github.com/CosmoCreeper/Sine) and [Advanced Tab Groups](https://github.com/Vertex-Mods/Advanced-Tab-Groups).
+1. Install [Sine](https://github.com/CosmoCreeper/Sine).
 2. **Enable JS from unofficial sources** — `about:config` → `sine.allow-unsafe-js` → `true` (required for any mod installed by GitHub repo name; Sine skips its scripts otherwise, silently).
 3. In Zen: Settings → Sine → add this repository: `shumaqueraza/ai-tab-sorter`.
 4. Updates arrive automatically from `main`.
@@ -49,27 +47,25 @@ A [Zen Browser](https://zen-browser.app) mod (works with the [Sine](https://gith
 3. Go to `about:support` → **Clear startup cache** → restart Zen.
 
 ### Set up a provider
-1. Click the **⚙ button** next to the Sort button.
-2. Pick a preset (e.g. *Ollama*), confirm the base URL.
+1. Open **Zen Settings → (Sine) mods → AI Tab Sorter → Configure**.
+2. Pick a preset (e.g. *Ollama*) — the base URL syncs automatically.
 3. Click **⟳ Fetch Models**, pick a model from the dropdown. Done.
 
 For provider-specific setup (LM Studio server toggle, `OLLAMA_ORIGINS`, Gemini keys, rate limits), see [docs/PROVIDERS.md](docs/PROVIDERS.md).
-
-> 💡 The **⟳ Fetch Models** button also lives directly in Zen Settings → Mods, next to the *Model name* field — click it there to pull your provider's model list and pick one.
 
 ## 🧠 How it works
 
 ```
 click ⇅  →  snapshot active-workspace tabs  →  build batched prompt
          →  your model (local or cloud)      →  parse + repair
-         →  reuse matching groups / create new ones via ATG
+         →  reconcile native groups (reuse / create / dissolve)
 ```
 
 Titles + URLs are the only inputs (configurable). One batched call per ≤30 tabs, `temperature 0.1`, with a count-repair ladder for small local models, and a zero-network heuristic fallback (domain + keyword clustering) when the provider is unreachable. Full design in [docs/RESEARCH.md](docs/RESEARCH.md) · source-level teardown of every competing Zen AI tab mod in [docs/COMPETITORS.md](docs/COMPETITORS.md) · test walkthrough in [TESTING.md](TESTING.md).
 
 ## ⚙️ Settings
 
-Basic settings live in Sine's mod preferences; everything (provider, keys, model, granularity, privacy, custom prompt) is in the mod's ⚙ panel. Stored via `about:config` under `mod.aitabsort.*`.
+Everything (provider, keys, model, granularity, privacy, custom prompt) lives in **Zen Settings → mods → AI Tab Sorter → Configure** — the Sine panel. The ⟳ Fetch Models button and the model dropdown are injected right into that panel. Stored via `about:config` under `mod.aitabsort.*`.
 
 > 🔑 API keys are stored in your profile's `prefs.js` in plain text (a platform limitation shared by all Zen mods). Use low-scope keys, or stick to local providers.
 

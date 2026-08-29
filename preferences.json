@@ -41,7 +41,7 @@
   {
     "property": "mod.aitabsort.model",
     "type": "string",
-    "label": "Model name (set with the ⟳ Fetch Models button beside this field)",
+    "label": "Model (pick from the ⟳ Fetch Models dropdown, or type manually)",
     "placeholder": "llama3.1:8b"
   },
   {
@@ -78,7 +78,7 @@
   {
     "property": "mod.aitabsort.showButtons",
     "type": "checkbox",
-    "label": "Show Sort and Settings buttons in the tab strip",
+    "label": "Show the Sort button beside the workspace Clear button",
     "default": "true"
   },
   {

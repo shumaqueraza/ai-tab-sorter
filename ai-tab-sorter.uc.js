@@ -4,13 +4,22 @@
 // ==/UserScript==
 /*
  * AI Tab Sorter — on-demand, AI-powered tab grouping for Zen Browser.
- * v0.1.0 — Apache-2.0 licensed. Requires Advanced Tab Groups:
- *   https://github.com/Vertex-Mods/Advanced-Tab-Groups
+ * v0.1.3 — Apache-2.0 licensed.
  *
- * Sort button appears above your tabs. Click = categorize open tabs with
- * any provider (Ollama / LM Studio / llama.cpp / OpenAI / OpenRouter / Groq /
- * Together / Mistral / Gemini / any OpenAI-compatible URL) and group them.
- * Strictly on-demand. Never sorts in the background. Never closes tabs.
+ * Sort appears as a small twin of Zen's native "Clear" button (left of it,
+ * in the workspace tabs header). Click = categorize the workspace's tabs
+ * with any provider (Ollama / LM Studio / llama.cpp / OpenAI / OpenRouter /
+ * Groq / Together / Mistral / Gemini / any OpenAI-compatible URL) and group
+ * them with Zen's native tab groups. Strictly on-demand. Never closes tabs.
+ *
+ * All settings live in the Sine mod preferences (Zen Settings → mods →
+ * AI Tab Sorter): this mod injects a model dropdown + ⟳ Fetch Models
+ * button into that panel. No extra buttons are added to the tab strip.
+ *
+ * Engineering note: the twin-button placement (clone of the Clear control)
+ * and the native group reconcile engine (ungroupTab / addTabGroup /
+ * addTabs / removeTabGroup with the option-shape ladder) are adapted from
+ * the open-source Zen mod "tidy" — battle-tested against Zen's DOM.
  *
  * Design docs: docs/RESEARCH.md · Providers: docs/PROVIDERS.md
  */
@@ -18,20 +27,34 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.1.2";
+  const VERSION = "0.1.3";
   const PREF_BRANCH = "mod.aitabsort.";
   const LOG_PREFIX = "[AITabSorter]";
-  // Settings page (Sine renders mod prefs here) — we enhance it instead of
-  // injecting tab-strip UI.
+
+  // Sine renders its mod-preferences UI inside the about:preferences tab
+  // (and, on some builds, a chrome:// preferences window). Match both.
   const IS_PREFS = typeof location !== "undefined"
-    && location.href.startsWith("chrome://browser/content/preferences");
+    && /^(about:preferences|chrome:\/\/browser\/content\/preferences)/.test(location.href);
+
+  // Services is on the global of browser.xhtml but NOT reliably present on
+  // about:preferences documents — resolve it once, tolerantly (also lets the
+  // Node unit-test context import this file without a browser).
+  const SVCS = (() => {
+    try { if (typeof Services !== "undefined" && Services) return Services; } catch (_e) { /* not defined */ }
+    try {
+      if (typeof ChromeUtils !== "undefined" && ChromeUtils) {
+        return ChromeUtils.importESModule("resource://gre/modules/Services.sys.mjs").Services;
+      }
+    } catch (_e) { /* unreachable */ }
+    return null;
+  })();
 
   const log = (...args) => {
     try {
-      if (Services.prefs.getBoolPref(PREF_BRANCH + "debugLogging", false)) {
+      if (SVCS && SVCS.prefs.getBoolPref(PREF_BRANCH + "debugLogging", false)) {
         console.log(LOG_PREFIX, ...args);
       }
-    } catch (_e) { /* prefs unavailable (Node test context) */ }
+    } catch (_e) { /* prefs unavailable */ }
   };
 
   /* ══════════════════════════════════════════════════════════════
@@ -60,7 +83,7 @@
     static get(key) {
       const def = this.DEFAULTS[key];
       try {
-        const svc = Services.prefs;
+        const svc = SVCS.prefs;
         const name = PREF_BRANCH + key;
         if (!svc.prefHasUserValue(name)) return def;
         switch (svc.getPrefType(name)) {
@@ -75,7 +98,7 @@
     static set(key, value) {
       try {
         const name = PREF_BRANCH + key;
-        const svc = Services.prefs;
+        const svc = SVCS.prefs;
         if (typeof value === "boolean") svc.setBoolPref(name, value);
         else if (typeof value === "number") svc.setIntPref(name, value);
         else svc.setStringPref(name, String(value ?? ""));
@@ -204,7 +227,7 @@
       if (cfg.dialect === "ollama") {
         url = `${cfg.baseURL}/api/tags`;
       } else if (cfg.dialect === "gemini") {
-        if (!cfg.apiKey) throw new ProviderError("Gemini needs an API key.", "Get one at aistudio.google.com and paste it in the panel.");
+        if (!cfg.apiKey) throw new ProviderError("Gemini needs an API key.", "Get one at aistudio.google.com and paste it into the settings.");
         url = `${cfg.baseURL}/v1beta/models?key=${encodeURIComponent(cfg.apiKey)}`;
       } else {
         url = `${cfg.baseURL}/models`;
@@ -218,7 +241,7 @@
     /** One categorization call → raw model text. */
     static async categorize(cfg, prompt, opts = {}) {
       if (!cfg.baseURL) throw new ProviderError("No base URL configured.");
-      if (!cfg.model) throw new ProviderError("No model selected.", "Open the ⚙ panel, click Fetch Models and pick a model.");
+      if (!cfg.model) throw new ProviderError("No model selected.", "Open Zen Settings → mods → AI Tab Sorter, click ⟳ Fetch Models and pick a model.");
       const maxTokens = Math.max(256, (opts.tabCount || 16) * 16);
       let url, headers, body;
 
@@ -483,11 +506,17 @@
   }
 
   /* ══════════════════════════════════════════════════════════════
-   * TabCollector — workspace-aware snapshot with exclusion rules
+   * TabCollector — workspace-aware snapshot (tidy-style scoping)
    * ══════════════════════════════════════════════════════════════ */
   class TabCollector {
+    static alive(tab) {
+      try { return !!tab && tab.isConnected && !tab.closing; } catch (_e) { return false; }
+    }
+
     static valid(tab) {
-      if (!tab || !tab.isConnected || tab.pinned) return false;
+      if (!this.alive(tab)) return false;
+      if (tab.pinned) return false;
+      if (tab.hasAttribute("zen-essential")) return false;
       if (tab.hasAttribute("zen-empty-tab")) return false;
       const g = tab.closest?.("tab-group");
       if (g && g.hasAttribute("split-view-group")) return false;
@@ -498,19 +527,46 @@
       return true;
     }
 
-    /** Sort targets: multi-selected tabs if ≥2 selected, else ungrouped
-     *  tabs of the ACTIVE workspace. */
+    /** The active workspace element (tidy's ladder — one <zen-workspace>
+     *  per workspace exists in the DOM; only one is [active]). */
+    static activeWorkspaceEl() {
+      return (
+        window.gZenWorkspaces?.activeWorkspaceElement
+        || document.querySelector("zen-workspace[active]")
+        || (typeof gBrowser !== "undefined" ? gBrowser.selectedTab?.closest?.("zen-workspace") : null)
+        || document.querySelector("zen-workspace")
+      );
+    }
+
+    /** The active workspace's tab section. */
+    static activeSection() {
+      return (
+        (typeof gBrowser !== "undefined" ? gBrowser.selectedTab?.closest?.(".zen-workspace-tabs-section") : null)
+        || document.querySelector(".zen-workspace-tabs-section[active]")
+        || document.querySelector(".zen-workspace-tabs-section")
+        || document.querySelector(".zen-workspace-normal-tabs-section")
+      );
+    }
+
+    /**
+     * Sort targets: multi-selected tabs if ≥2 selected, else ALL normal
+     * tabs of the ACTIVE workspace (already-grouped tabs included — the
+     * engine reconciles groups in place, it does not duplicate them).
+     */
     static collect() {
-      const selected = (gBrowser.selectedTabs || []).filter((t) => this.valid(t));
+      let selected = [];
+      try {
+        selected = (gBrowser.selectedTabs || []).filter((t) => this.valid(t));
+      } catch (_e) { /* no multi-selection API */ }
       if (selected.length > 1) return selected;
 
       let candidates = [];
-      try {
-        const strip = gZenWorkspaces?.activeWorkspaceStrip;
-        if (strip) candidates = [...strip.querySelectorAll("tab")];
-      } catch (_e) { /* fall through */ }
-      if (!candidates.length) candidates = [...gBrowser.tabs];
-      return candidates.filter((t) => this.valid(t) && !t.closest?.("tab-group"));
+      const section = this.activeSection();
+      if (section) candidates = [...section.querySelectorAll("tab, .tabbrowser-tab")];
+      if (!candidates.length) {
+        try { candidates = [...gBrowser.tabs]; } catch (_e) { /* nothing */ }
+      }
+      return candidates.filter((t) => this.valid(t));
     }
 
     /** Extract {title, hostname, url} for one tab. */
@@ -537,133 +593,211 @@
       };
     }
 
-    /** Groups of the active workspace: [{label, el}]. Prefers the ATG
-     *  interop surface when present; falls back to raw gBrowser.tabGroups. */
-    static existingGroups() {
-      let groups;
-      try {
-        groups = [...gBrowser.tabGroups].filter((g) => g.tagName === "tab-group");
-      } catch (_e) { return []; }
-      const activeWs = gZenWorkspaces?.activeWorkspace?.uuid || null;
-      const inWorkspace = groups.filter((g) => {
-        if (g.hasAttribute("split-view-group")) return false;
-        const wsId = g.getAttribute("zen-workspace-id")
-          || this.firstTabWorkspace(g)
-          || (activeWs ? activeWs : null);
-        return !activeWs || !wsId || wsId === activeWs;
-      });
-      return inWorkspace
-        .filter((g) => g.label)
-        .map((g) => ({ label: g.label, el: g }));
+    /** Named native groups in the active section: Map(normLabel → el). */
+    static sectionGroups() {
+      const map = new Map();
+      const section = this.activeSection() || document;
+      for (const g of section.querySelectorAll("tab-group")) {
+        if (g.hasAttribute("split-view-group")) continue;
+        const label = String(g.label ?? g.getAttribute("label") ?? "").trim();
+        if (!label) continue;
+        const key = label.toLowerCase();
+        if (!map.has(key)) map.set(key, g);
+      }
+      return map;
     }
 
-    static firstTabWorkspace(group) {
-      try {
-        const t = group.querySelector("tab");
-        return t?.getAttribute("zen-workspace-id") || null;
-      } catch (_e) { return null; }
+    /** Existing-group labels for the reuse hint in the prompt. */
+    static existingLabels() {
+      return [...this.sectionGroups().values()]
+        .map((g) => String(g.label ?? g.getAttribute("label") ?? "").trim())
+        .filter(Boolean);
     }
   }
 
   /* ══════════════════════════════════════════════════════════════
-   * GroupingEngine — drives native group APIs (reuse-or-create)
+   * GroupingEngine — Zen native group reconcile (engine adapted from
+   * the "tidy" Zen mod: ungroupTab → addTabGroup ladder → addTabs →
+   * removeTabGroup; no invented APIs, everything verified working).
    * ══════════════════════════════════════════════════════════════ */
   class GroupingEngine {
     static PALETTE = ["blue", "turquoise", "green", "yellow", "orange", "red", "pink", "purple"];
-    static #colorIdx = 0;
 
-    static expand(group) {
-      try {
-        if (group.getAttribute("collapsed") === "true") {
-          group.setAttribute("collapsed", "false");
-          group.querySelector(".tab-group-label")?.setAttribute("aria-expanded", "true");
-        }
-      } catch (_e) { /* noop */ }
+    static getGroupTabs(el) {
+      try { return el.tabs ? [...el.tabs] : [...el.querySelectorAll("tab, .tabbrowser-tab")]; }
+      catch (_e) { return []; }
     }
 
-    static nextColor(existingGroups) {
-      const used = new Set(existingGroups.map((g) => {
-        const c = g.el?.color || "";
-        return String(c).split("-").pop();
-      }));
-      for (let i = 0; i < this.PALETTE.length; i++) {
-        const color = this.PALETTE[(this.#colorIdx + i) % this.PALETTE.length];
-        if (!used.has(color)) {
-          this.#colorIdx = (this.#colorIdx + i + 1) % this.PALETTE.length;
-          return color;
+    static hasLiveTabs(el) {
+      return this.getGroupTabs(el).some((t) => TabCollector.alive(t));
+    }
+
+    static dissolve(el, reason) {
+      try { el.label = ""; el.removeAttribute?.("label"); } catch (_e) { /* non-fatal */ }
+      for (const tab of this.getGroupTabs(el).filter((t) => TabCollector.alive(t))) {
+        if (typeof gBrowser.ungroupTab !== "function") break;
+        try { gBrowser.ungroupTab(tab); }
+        catch (e) { log("ungroupTab failed while dissolving:", reason, e?.message); }
+      }
+      if (this.hasLiveTabs(el)) return; // teardown deferred; sweep finishes it
+      try { gBrowser.removeTabGroup?.(el); }
+      catch (e) { log("removeTabGroup failed while dissolving:", reason, e?.message); }
+      if (el.isConnected) { try { el.remove(); } catch (_e) { /* already detached */ } }
+    }
+
+    /** Create one fresh native group (tidy's option-shape ladder — the
+     *  first shape that doesn't throw wins; label/color re-set explicitly
+     *  because some builds ignore the options). */
+    static create(members, label, color) {
+      if (typeof gBrowser.ungroupTab === "function") {
+        for (const tab of members) {
+          if (!tab.group) continue;
+          try { gBrowser.ungroupTab(tab); }
+          catch (e) { log("ungroupTab failed before creating group:", label, e?.message); }
         }
       }
-      return this.PALETTE[this.#colorIdx++ % this.PALETTE.length];
+      const anchor = members[0];
+      const attempts = [
+        { label, color, insertBefore: anchor },
+        { label, color },
+        { label, color, isUserTriggered: true },
+      ];
+      for (const options of attempts) {
+        try {
+          const group = gBrowser.addTabGroup(members, options);
+          if (group) {
+            try {
+              if (label) { group.label = label; group.setAttribute("label", label); }
+              if (color) { group.color = color; group.setAttribute("color", color); }
+            } catch (_e) { /* non-fatal */ }
+            return group;
+          }
+        } catch (e) {
+          log(`addTabGroup attempt failed for "${label}":`, e?.message);
+        }
+      }
+      return null;
     }
 
-    static findByLabel(label, existingGroups) {
-      return existingGroups.find((g) => g.label === label && g.el?.isConnected) || null;
+    /** Dissolve any group left empty, scoped to the active section. */
+    static removeEmpty() {
+      const section = TabCollector.activeSection() || document;
+      let removed = 0;
+      for (const el of [...section.querySelectorAll("tab-group")]) {
+        if (this.hasLiveTabs(el)) continue;
+        try {
+          if (typeof gBrowser.removeTabGroup === "function") gBrowser.removeTabGroup(el);
+          else el.remove();
+          removed++;
+        } catch (e) { log("empty-group sweep failed:", e?.message); }
+      }
+      return removed;
     }
 
     /**
-     * assignments: [{tab, category}] → apply. Returns
-     * {moved, created, reused, skipped} counts. NEVER removes tabs.
+     * Apply a plan [{name, tabs}] by reconciling against current groups:
+     * groups whose name survives keep position + color (only changed tabs
+     * move in via addTabs), new groups are created, abandoned groups
+     * dissolve. Returns {moved, created, reused, skipped}.
      */
-    static apply(assignments) {
-      const cfg = PrefStore.all();
-      const existing = TabCollector.existingGroups();
-      const byCategory = new Map();
-      for (const a of assignments) {
-        if (!a.category || !a.tab?.isConnected) continue;
-        if (!byCategory.has(a.category)) byCategory.set(a.category, []);
-        byCategory.get(a.category).push(a.tab);
-      }
-
+    static apply(plan, cfg = {}) {
       const stats = { moved: 0, created: 0, reused: 0, skipped: 0 };
-      const ordered = [...byCategory.entries()].sort((a, b) => b[1].length - a[1].length);
+      if (typeof gBrowser.addTabGroup !== "function") {
+        throw new Error("gBrowser.addTabGroup is unavailable in this Zen build.");
+      }
+      const minSize = Math.max(1, Number(cfg.minGroupSize) || 1);
+      const reuse = cfg.reuseGroups !== false;
 
-      for (const [category, tabs] of ordered) {
-        const live = tabs.filter((t) => t.isConnected);
-        if (!live.length) continue;
-        const group = cfg.reuseGroups ? this.findByLabel(category, existing) : null;
-
-        if (group) {
-          // ── reuse existing group ──
-          this.expand(group.el);
-          for (const tab of live) {
-            if (tab.closest("tab-group") === group.el) { stats.skipped++; continue; }
-            try {
-              gBrowser.moveTabToGroup(tab, group.el);
-              stats.moved++;
-            } catch (e) {
-              log("moveTabToGroup failed", category, e);
-              stats.skipped++;
-            }
-          }
-          stats.reused++;
-        } else if (live.length >= Math.max(1, cfg.minGroupSize) || category === "Uncategorized") {
-          if (live.length < Math.max(1, cfg.minGroupSize)) { stats.skipped += live.length; continue; }
-          // ── create new group ──
-          try {
-            const el = gBrowser.addTabGroup(live, {
-              label: category,
-              color: this.nextColor(existing),
-              insertBefore: live[0],
-            });
-            if (el && el.isConnected) {
-              existing.push({ label: category, el });
-              stats.created++;
-            } else {
-              // addTabGroup may throw/return disconnected — fallback lookup
-              const fb = this.findByLabel(category, TabCollector.existingGroups());
-              if (fb) { existing.push(fb); stats.created++; }
-              else { log("addTabGroup produced no group for", category); stats.skipped += live.length; }
-            }
-          } catch (e) {
-            log("addTabGroup failed", category, e);
-            const fb = this.findByLabel(category, TabCollector.existingGroups());
-            if (fb) { existing.push(fb); stats.created++; }
-            else stats.skipped += live.length;
-          }
-        } else {
-          stats.skipped += live.length; // below min group size, no existing match
+      // Existing groups derived from the plan's own tabs (a tab that sits
+      // in a group whose name survives keeps that group in place).
+      const existing = new Map(); // normName → el
+      for (const group of plan) {
+        for (const tab of group.tabs) {
+          if (!TabCollector.alive(tab)) continue;
+          const el = tab.group;
+          if (!el) continue;
+          const name = String(el.label ?? el.getAttribute("label") ?? "").trim().toLowerCase();
+          if (name && !existing.has(name)) existing.set(name, el);
         }
       }
+      // When reuse is on, named groups in the section are also candidates.
+      if (reuse) {
+        for (const [name, el] of TabCollector.sectionGroups()) {
+          if (!existing.has(name)) existing.set(name, el);
+        }
+      }
+
+      // Dissolve abandoned groups BEFORE building, so stale labelled husks
+      // never coexist with the fresh layout (avoids the re-sort flicker).
+      const planNames = new Set(plan.map((g) => g.name.toLowerCase()));
+      for (const [name, el] of existing) {
+        if (planNames.has(name)) continue;
+        if (!el.isConnected) continue;
+        // Only dissolve groups that actually hold any of our tabs, or (with
+        // reuse on) empty husks; never touch groups we know nothing about.
+        const holdsPlanTabs = plan.some((g) => g.tabs.some((t) => t.group === el));
+        if (!holdsPlanTabs && this.hasLiveTabs(el)) continue;
+        log("dissolving abandoned group:", name);
+        this.dissolve(el, "abandoned by plan");
+      }
+
+      const usedColors = new Set([...existing.values()]
+        .filter((el) => el.isConnected)
+        .map((el) => String(el.color ?? el.getAttribute("color") ?? "")));
+      let paletteIdx = 0;
+      const nextColor = () => {
+        let color;
+        do { color = this.PALETTE[paletteIdx++ % this.PALETTE.length]; }
+        while (usedColors.has(color) && paletteIdx <= this.PALETTE.length * 2);
+        usedColors.add(color);
+        return color;
+      };
+
+      const ordered = [...plan].sort((a, b) => b.tabs.length - a.tabs.length);
+      for (const group of ordered) {
+        const live = group.tabs.filter((t) => TabCollector.alive(t));
+        if (!live.length) continue;
+        const el = existing.get(group.name.toLowerCase());
+
+        if (el?.isConnected && typeof el.addTabs === "function") {
+          // ── reuse in place: move in only the tabs not already here ──
+          const toAdd = live.filter((tab) => tab.group !== el);
+          if (toAdd.length) {
+            try {
+              el.addTabs(toAdd);
+              stats.moved += toAdd.length;
+              log(`reused group "${group.name}" in place (+${toAdd.length} tabs)`);
+            } catch (e) {
+              log(`addTabs failed for "${group.name}":`, e?.message, "— creating a fresh group instead");
+              const created = this.create(live, group.name, nextColor());
+              if (created) { stats.created++; } else { stats.skipped += live.length; }
+            }
+          } else {
+            log(`group "${group.name}" already holds its tabs — nothing to move`);
+          }
+          stats.reused++;
+          continue;
+        }
+
+        if (live.length < minSize) {
+          log(`group "${group.name}" has ${live.length} tab(s) < min ${minSize} — left ungrouped`);
+          stats.skipped += live.length;
+          continue;
+        }
+
+        const created = this.create(live, group.name, nextColor());
+        if (created) {
+          stats.created++;
+          log(`created group "${group.name}" (${live.length} tabs)`);
+        } else {
+          log(`FAILED to create group "${group.name}" (${live.length} tabs) — tabs left as-is`);
+          stats.skipped += live.length;
+        }
+      }
+
+      // Sweep empty husks (deferred teardowns land here), twice for safety.
+      this.removeEmpty();
+      setTimeout(() => this.removeEmpty(), 400);
       return stats;
     }
   }
@@ -676,29 +810,27 @@
     static isSorting() { return this.#sorting; }
 
     static capability() {
-      if (typeof gBrowser !== "undefined" && typeof gBrowser.addTabGroup === "function") return true;
-      return false;
+      return typeof gBrowser !== "undefined" && typeof gBrowser.addTabGroup === "function";
     }
 
     static async sort() {
       if (this.#sorting) { log("sort already running"); return; }
       if (!this.capability()) {
-        ButtonInjector.setStatus("error", "Tab groups unavailable — install Advanced Tab Groups", 6000);
+        SortButton.setStatus("err", "This Zen build has no tab-group API — cannot sort", 6000);
         return;
       }
       const tabs = TabCollector.collect();
       if (tabs.length < 2) {
-        ButtonInjector.setStatus("error", "Need at least 2 sortable tabs (select tabs to sort only them)", 4000);
+        SortButton.setStatus("err", "Need at least 2 sortable tabs (multi-select to sort a subset)", 5000);
         return;
       }
 
       this.#sorting = true;
-      ButtonInjector.setSorting(true, tabs.length);
+      SortButton.setSorting(true, tabs.length);
       const t0 = Date.now();
       try {
         const cfg = ProviderHub.cfg();
-        const data = tabs.map((t) => TabCollector.describe(t));
-        const existingLabels = TabCollector.existingGroups().map((g) => g.label);
+        const existingLabels = TabCollector.existingLabels();
 
         let categories = null;
         let usedFallback = false;
@@ -720,543 +852,380 @@
           } catch (e) {
             log("provider failed:", e.message, e.hint || "");
             if (!PrefStore.get("heuristicFallback")) {
-              ButtonInjector.setStatus("error", `${e.message}${e.hint ? " — " + e.hint : ""}`, 8000);
+              SortButton.setStatus("err", `${e.message}${e.hint ? " — " + e.hint : ""}`, 8000);
               return;
             }
             categories = null;
+            usedFallback = true;
           }
         } else {
           log("no model configured — using heuristic mode");
+          usedFallback = true;
         }
 
         if (!categories) {
+          const data = tabs.map((t) => TabCollector.describe(t));
           categories = HeuristicSorter.group(data, PrefStore.get("minGroupSize"));
-          usedFallback = !PrefStore.get("model") ? false : true;
         }
 
-        // Drop nulls and (optionally) Uncategorized singles before applying
-        const existingSet = new Set(existingLabels);
-        const assignments = [];
+        // Build the plan: category → [tabs]; null/"Uncategorized" tabs stay ungrouped.
+        const byCategory = new Map();
+        let unclassified = 0;
         for (let i = 0; i < tabs.length; i++) {
           const cat = categories[i];
-          if (!cat) continue;
-          if (cat === "Uncategorized" && !existingSet.has("Uncategorized")) continue;
-          assignments.push({ tab: tabs[i], category: cat });
+          if (!cat || cat === "Uncategorized") { unclassified++; continue; }
+          if (!byCategory.has(cat)) byCategory.set(cat, []);
+          byCategory.get(cat).push(tabs[i]);
+        }
+        const plan = [...byCategory.entries()].map(([name, groupTabs]) => ({ name, tabs: groupTabs }));
+
+        if (!plan.length) {
+          SortButton.setStatus("err", `No groups found for ${tabs.length} tabs (${unclassified} unclassified)`, 5000);
+          console.info(LOG_PREFIX, `sort produced no plan`, { tabs: tabs.length, unclassified });
+          return;
         }
 
-        const stats = GroupingEngine.apply(assignments);
+        const stats = GroupingEngine.apply(plan, cfg);
         const ms = Date.now() - t0;
         const total = stats.created + stats.reused;
         const groupsWord = total === 1 ? "group" : "groups";
-        ButtonInjector.setStatus(
+        SortButton.setStatus(
           "done",
-          `${assignments.length} tabs → ${total} ${groupsWord} in ${(ms / 1000).toFixed(1)}s${usedFallback ? " (offline fallback)" : ""}`,
+          `${tabs.length} tabs → ${total} ${groupsWord} in ${(ms / 1000).toFixed(1)}s${usedFallback ? " (offline mode)" : ""}`,
           4000
         );
-        console.info(LOG_PREFIX, `sorted ${tabs.length} tabs →`, stats, `${ms}ms`);
+        console.info(LOG_PREFIX, `sorted ${tabs.length} tabs →`, { ...stats, unclassified }, `${ms}ms`);
       } catch (e) {
         console.error(LOG_PREFIX, "sort failed:", e);
-        ButtonInjector.setStatus("error", `Sort failed: ${e.message}`, 8000);
+        SortButton.setStatus("err", `Sort failed: ${e.message}`, 8000);
       } finally {
         this.#sorting = false;
-        ButtonInjector.setSorting(false);
+        SortButton.setSorting(false);
       }
     }
   }
 
   /* ══════════════════════════════════════════════════════════════
-   * SettingsPanel — native popup: provider, Fetch Models, model
-   * selector, behavior + privacy options
+   * SortButton — a twin of Zen's native "Clear" control, inserted to
+   * its LEFT inside the same header row (pattern adapted from "tidy":
+   * clone Clear's tag + classes, never keep Clear's own control class
+   * or Zen's first-match querySelector steals Clear's icon/styling).
    * ══════════════════════════════════════════════════════════════ */
-  const HTMLNS = "http://www.w3.org/1999/xhtml";
-
-  class SettingsPanel {
-    static #panel = null;
-    static #els = {};
-
-    static ensure() { /* panel is built lazily by open() */ }
-
-    static #h(tag, attrs = {}, ...children) {
-      const el = document.createElementNS(HTMLNS, tag);
-      for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-      for (const c of children) if (c) el.append(c);
-      return el;
-    }
-
-    static #build() {
-      if (this.#panel?.isConnected) return this.#panel;
-      this.#panel?.remove();
-
-      const root = this.#h("div", { class: "ats-root" });
-      root.innerHTML = `
-        <div class="ats-head"><span class="ats-title">AI Tab Sorter</span><span class="ats-ver">v${VERSION}</span></div>
-
-        <div class="ats-l">Provider</div>
-        <select id="ats-provider"></select>
-
-        <div class="ats-l">Base URL</div>
-        <input id="ats-base" type="text" spellcheck="false" placeholder="http://localhost:11434"/>
-
-        <div id="ats-key-row">
-          <div class="ats-l">API key</div>
-          <input id="ats-key" type="password" spellcheck="false" placeholder="not needed for local runtimes"/>
-        </div>
-
-        <div class="ats-modelrow">
-          <button id="ats-fetch">⟳ Fetch Models</button>
-          <select id="ats-model"></select>
-        </div>
-        <div id="ats-status" class="ats-status"></div>
-
-        <div class="ats-sep"></div>
-
-        <div class="ats-grid">
-          <span class="ats-l">Granularity</span>
-          <select id="ats-gran">
-            <option value="1">Broadest (3-6 groups)</option>
-            <option value="2">Broad</option>
-            <option value="3" selected="selected">Balanced</option>
-            <option value="4">Specific</option>
-            <option value="5">Finest (12+ groups)</option>
-          </select>
-          <span class="ats-l">Output</span>
-          <select id="ats-out">
-            <option value="lines" selected="selected">Simple lines (works everywhere)</option>
-            <option value="json">JSON (strict models)</option>
-          </select>
-          <span class="ats-l">Min group size</span>
-          <input id="ats-min" type="number" min="1" max="10" step="1"/>
-          <span class="ats-l">Data sent</span>
-          <select id="ats-payload">
-            <option value="title-url" selected="selected">Title + full URL</option>
-            <option value="title-host">Title + hostname</option>
-            <option value="title">Title only</option>
-          </select>
-          <span class="ats-l">Timeout</span>
-          <input id="ats-timeout" type="number" min="10" max="600" step="5"/>
-        </div>
-
-        <label class="ats-check"><input type="checkbox" id="ats-reuse"/> Reuse existing groups by name</label>
-        <label class="ats-check"><input type="checkbox" id="ats-fallback"/> Offline fallback when provider unreachable</label>
-        <label class="ats-check"><input type="checkbox" id="ats-debug"/> Debug logging in console</label>
-
-        <div class="ats-sep"></div>
-        <div id="ats-flow" class="ats-flow"></div>
-        <button id="ats-sort" class="ats-primary">⇅ Sort tabs now</button>
-      `;
-
-      const providerSel = root.querySelector("#ats-provider");
-      for (const [value, p] of Object.entries(ProviderHub.PRESETS)) {
-        const o = this.#h("option", { value });
-        o.textContent = p.label;
-        providerSel.append(o);
-      }
-
-      this.#panel = document.createXULElement("panel");
-      this.#panel.id = "ai-tab-sorter-panel";
-      this.#panel.setAttribute("type", "arrow");
-      this.#panel.setAttribute("class", "ai-tab-sorter-panel");
-      this.#panel.setAttribute("noautofocus", "true");
-      this.#panel.append(root);
-      (document.getElementById("mainPopupSet") || document.documentElement).append(this.#panel);
-
-      this.#els = {
-        provider: providerSel,
-        base: root.querySelector("#ats-base"),
-        keyRow: root.querySelector("#ats-key-row"),
-        key: root.querySelector("#ats-key"),
-        fetchBtn: root.querySelector("#ats-fetch"),
-        model: root.querySelector("#ats-model"),
-        status: root.querySelector("#ats-status"),
-        gran: root.querySelector("#ats-gran"),
-        out: root.querySelector("#ats-out"),
-        min: root.querySelector("#ats-min"),
-        payload: root.querySelector("#ats-payload"),
-        timeout: root.querySelector("#ats-timeout"),
-        reuse: root.querySelector("#ats-reuse"),
-        fallback: root.querySelector("#ats-fallback"),
-        debug: root.querySelector("#ats-debug"),
-        flow: root.querySelector("#ats-flow"),
-        sort: root.querySelector("#ats-sort"),
-      };
-      this.#wire();
-      return this.#panel;
-    }
-
-    static #wire() {
-      const e = this.#els;
-      e.provider.addEventListener("command", () => this.#onProviderChange());
-      e.base.addEventListener("change", () => { PrefStore.set("baseURL", e.base.value.trim()); this.#refreshFlow(); });
-      e.key.addEventListener("change", () => PrefStore.set("apiKey", e.key.value.trim()));
-      e.model.addEventListener("command", () => PrefStore.set("model", e.model.value));
-      e.gran.addEventListener("command", () => PrefStore.set("granularity", Number(e.gran.value)));
-      e.out.addEventListener("command", () => PrefStore.set("outputMode", e.out.value));
-      e.min.addEventListener("change", () => PrefStore.set("minGroupSize", Math.min(10, Math.max(1, Number(e.min.value) || 2))));
-      e.payload.addEventListener("command", () => { PrefStore.set("payloadMode", e.payload.value); this.#refreshFlow(); });
-      e.timeout.addEventListener("change", () => PrefStore.set("timeoutSec", Math.min(600, Math.max(10, Number(e.timeout.value) || 120))));
-      e.reuse.addEventListener("command", () => PrefStore.set("reuseGroups", e.reuse.checked));
-      e.fallback.addEventListener("command", () => PrefStore.set("heuristicFallback", e.fallback.checked));
-      e.debug.addEventListener("command", () => PrefStore.set("debugLogging", e.debug.checked));
-      e.fetchBtn.addEventListener("command", () => this.#fetchModels());
-      e.sort.addEventListener("command", () => { this.#panel.hidePopup(); SortController.sort(); });
-    }
-
-    static #onProviderChange() {
-      const id = this.#els.provider.value;
-      const preset = ProviderHub.PRESETS[id];
-      const currentBase = this.#els.base.value.trim();
-      const isOtherPreset = Object.values(ProviderHub.PRESETS).some((p) => p.baseURL === currentBase);
-      if (!currentBase || isOtherPreset) {
-        this.#els.base.value = preset.baseURL;
-        PrefStore.set("baseURL", preset.baseURL);
-      }
-      PrefStore.set("provider", id);
-      this.#els.keyRow.style.display = preset.auth === false ? "none" : "";
-      this.#refreshFlow();
-    }
-
-    static #status(text, kind = "") {
-      const s = this.#els.status;
-      s.textContent = text || "";
-      s.className = `ats-status${kind ? " " + kind : ""}`;
-    }
-
-    static #refreshFlow() {
-      const cfg = ProviderHub.cfg();
-      const payload = { "title-url": "titles + URLs", "title-host": "titles + hostnames", "title": "titles only" }[cfg.payloadMode] || "titles + URLs";
-      const local = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(cfg.baseURL);
-      this.#els.flow.textContent = `Sends ${payload} → ${cfg.baseURL || "(no base URL)"}${local ? " · stays on your machine" : " · ⚠ leaves your machine"}`;
-      this.#els.flow.classList.toggle("ats-warn", !local && !!cfg.baseURL);
-    }
-
-    static #populateModels(models, currentModel) {
-      const sel = this.#els.model;
-      sel.textContent = "";
-      if (!models.length) {
-        const o = this.#h("option", { value: "" });
-        o.textContent = "— no models fetched —";
-        sel.append(o);
-        return;
-      }
-      const ids = new Set();
-      if (currentModel && !models.some((m) => m.id === currentModel)) {
-        const o = this.#h("option", { value: currentModel });
-        o.textContent = `${currentModel} (typed)`;
-        sel.append(o);
-        ids.add(currentModel);
-      }
-      for (const m of models) {
-        const o = this.#h("option", { value: m.id });
-        o.textContent = m.label || m.id;
-        sel.append(o);
-        ids.add(m.id);
-      }
-      sel.value = models.some((m) => m.id === currentModel) ? currentModel : (sel.firstElementChild?.value || "");
-      PrefStore.set("model", sel.value);
-    }
-
-    static async #fetchModels() {
-      const btn = this.#els.fetchBtn;
-      btn.disabled = true;
-      const label = btn.textContent;
-      btn.textContent = "Fetching…";
-      const t0 = Date.now();
-      try {
-        const models = await ProviderHub.listModels();
-        PrefStore.set("modelList", JSON.stringify(models));
-        this.#populateModels(models, PrefStore.get("model"));
-        this.#status(`✓ ${models.length} models · ${Date.now() - t0}ms`, "ok");
-      } catch (err) {
-        this.#status(`✗ ${err.message}${err.hint ? " — " + err.hint : ""}`, "err");
-      } finally {
-        btn.disabled = false;
-        btn.textContent = label;
-      }
-    }
-
-    static open(anchor) {
-      const panel = this.#build();
-      const e = this.#els;
-      const cfg = PrefStore.all();
-      e.provider.value = cfg.provider;
-      e.base.value = cfg.baseURL;
-      e.key.value = cfg.apiKey;
-      e.gran.value = String(cfg.granularity);
-      e.out.value = cfg.outputMode;
-      e.min.value = String(cfg.minGroupSize);
-      e.payload.value = cfg.payloadMode;
-      e.timeout.value = String(cfg.timeoutSec);
-      e.reuse.checked = cfg.reuseGroups;
-      e.fallback.checked = cfg.heuristicFallback;
-      e.debug.checked = cfg.debugLogging;
-      e.keyRow.style.display = (ProviderHub.PRESETS[cfg.provider]?.auth === false) ? "none" : "";
-      let cached;
-      try { cached = JSON.parse(cfg.modelList || "[]"); } catch (_e2) { cached = []; }
-      this.#populateModels(cached, cfg.model);
-      this.#status("");
-      this.#refreshFlow();
-      panel.openPopup(anchor, "after_start", 6, 0, false, null);
-    }
-  }
-
-  /* ══════════════════════════════════════════════════════════════
-   * ButtonInjector — Sort + ⚙ buttons above the tab strip,
-   * re-attached through workspace hooks + MutationObserver
-   * ══════════════════════════════════════════════════════════════ */
-  class ButtonInjector {
-    static SORT_ID = "ai-tab-sorter-sort-btn";
-    static GEAR_ID = "ai-tab-sorter-gear-btn";
+  class SortButton {
+    static ID = "ai-tab-sorter-sort-btn";
+    static CLEAR_CLASS = "zen-workspace-close-unpinned-tabs-button";
+    static LABEL = "⇅ Sort";
+    static TOOLTIP = "AI Tab Sorter — group the tabs of this workspace (multi-select tabs to sort only those)";
+    static #watchers = false;
     static #statusTimer = null;
-    static #observer = null;
-    static #reattachTimer = null;
 
-    static anchors() {
-      // 1) Current Zen vertical layout: the normal-tabs section of the active
-      //    workspace strip (same container ATG inserts its groups into).
-      try {
-        const strip = window.gZenWorkspaces?.activeWorkspaceStrip;
-        const sec = strip?.querySelector(".zen-workspace-normal-tabs-section");
-        if (sec) return [sec];
-      } catch (_e) { /* fall through */ }
-      // 2) Any workspace strips present (Zen keeps inactive ones in DOM).
-      const secs = document.querySelectorAll(".zen-workspace-normal-tabs-section");
-      if (secs.length) return [secs[0]];
-      // 3) Classic periphery (new-tab button container).
-      const periphery = document.querySelector("#tabbrowser-arrowscrollbox-periphery");
-      if (periphery) return [periphery];
-      // 4) Last resort: the tabs container itself.
-      const tabs = document.querySelector("#tabbrowser-tabs");
-      return tabs ? [tabs] : [];
-    }
-
-    /** Locate a header "Clear"-style action button to sit beside (user request:
-     *  Sort belongs next to Clear in the workspace header, not at strip bottom). */
-    static findHeaderAction() {
-      try {
-        const strip = window.gZenWorkspaces?.activeWorkspaceStrip
-          || document.querySelector(".zen-workspace-normal-tabs-section")?.parentElement;
-        if (!strip) return null;
-        for (const el of strip.querySelectorAll("button, toolbarbutton, label, span")) {
-          const t = (el.getAttribute("label") || el.textContent || "").trim().toLowerCase();
-          if (t && (t === "clear" || t === "clear all" || t === "clean")) return el;
+    /** Zen's native "Clear" control. Fast path: its known class inside the
+     *  active workspace. Fallback: text/label/tooltiptext scan (tidy). */
+    static clearControl() {
+      const scopes = [TabCollector.activeWorkspaceEl(), TabCollector.activeSection(), document].filter(Boolean);
+      for (const scope of scopes) {
+        try {
+          const byClass = scope.querySelector("." + this.CLEAR_CLASS);
+          if (byClass) return byClass;
+        } catch (_e) { /* bad scope */ }
+      }
+      const seen = new Set();
+      const selector = "toolbarbutton, button, label, span, hbox, vbox, toolbaritem, [label], [tooltiptext]";
+      for (const scope of scopes) {
+        for (const el of scope.querySelectorAll(selector)) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          const label = (el.getAttribute?.("label") || "").trim().toLowerCase();
+          const text = (el.textContent || "").trim().toLowerCase();
+          const tip = (el.getAttribute?.("tooltiptext") || "").trim().toLowerCase();
+          if (label === "clear" || text === "clear" || tip === "clear") return el;
         }
-      } catch (_e) { /* fall through */ }
+      }
       return null;
     }
 
+    static build(clear) {
+      const el = document.createElement(clear ? clear.tagName : "span");
+      el.id = this.ID;
+      el.textContent = this.LABEL;
+      el.setAttribute("label", this.LABEL);
+      el.setAttribute("tooltiptext", this.TOOLTIP);
+      el.title = this.TOOLTIP;
+      el.className = clear ? clear.className : "ai-tab-sorter-fallback";
+      if (clear) {
+        // Keep Clear's look, but never its control class (see class docs).
+        el.classList.remove(this.CLEAR_CLASS);
+        el.dataset.twin = "1";
+      }
+      const sort = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        SortController.sort();
+      };
+      el.addEventListener("click", sort);
+      el.addEventListener("command", sort); // XUL buttons fire command
+      return el;
+    }
+
+    static #btn() { return document.getElementById(this.ID); }
+
+    /** True when the twin exists AND sits immediately LEFT of the ACTIVE
+     *  workspace's Clear control (a stale twin in another workspace does
+     *  not count — workspace switches re-place it). */
+    static twinIsCurrent() {
+      const existing = this.#btn();
+      if (!(existing?.dataset?.twin === "1" && existing.isConnected)) return false;
+      const clear = this.clearControl();
+      return (
+        !!clear
+        && existing.parentElement === clear.parentElement
+        && existing.nextElementSibling === clear
+      );
+    }
+
+    static placeTwin() {
+      if (this.twinIsCurrent()) return true;
+      const clear = this.clearControl();
+      if (!clear?.parentElement) return false;
+      this.#btn()?.remove();
+      clear.parentElement.insertBefore(this.build(clear), clear);
+      log("Sort twin mounted left of the Clear button");
+      return true;
+    }
+
+    static installWatchers() {
+      if (this.#watchers) return;
+      this.#watchers = true;
+      // Clear is hover-revealed on some builds — re-place on any mouseover
+      // (cheap: placeTwin early-returns once the twin is current).
+      document.documentElement.addEventListener("mouseover", () => this.placeTwin(), true);
+      // One <zen-workspace> per workspace; the twin must follow the active one.
+      try {
+        const zw = window.gZenWorkspaces;
+        if (typeof zw?.addChangeListeners === "function") {
+          zw.addChangeListeners(() => this.placeTwin(), { once: false });
+        }
+      } catch (e) { log("workspace watcher failed:", e?.message); }
+    }
+
     static ensure() {
-      if (!PrefStore.get("enabled") || !PrefStore.get("showButtons")) return;
+      this.installWatchers();
+      this.placeTwin();
+    }
 
-      // Where a button wants to live this pass: right after the header Clear
-      // button → else just above the tabs section (under the header row) →
-      // else the legacy periphery/tabs fallbacks.
-      const placement = () => {
-        const clearBtn = this.findHeaderAction();
-        if (clearBtn?.isConnected) return { insert: (b) => clearBtn.after(b) };
-        const sec = document.querySelector(".zen-workspace-normal-tabs-section");
-        if (sec?.parentElement) return { insert: (b) => sec.parentElement.insertBefore(b, sec) };
-        const periphery = document.querySelector("#tabbrowser-arrowscrollbox-periphery");
-        if (periphery) return { insert: (b) => periphery.before(b) };
-        const tabs = document.querySelector("#tabbrowser-tabs");
-        if (tabs) return { insert: (b) => tabs.append(b) };
-        return null;
-      };
-
-      const place = (id, tooltip, onClick) => {
-        let btn = document.getElementById(id);
-        const spot = placement();
-        if (!spot) {
-          if (!this.#warnedNoAnchor) {
-            this.#warnedNoAnchor = true;
-            console.info(LOG_PREFIX, "no tab-strip anchor found yet — will keep retrying");
-          }
-          return;
-        }
-        if (!btn || !btn.isConnected) {
-          try {
-            btn = window.MozXULElement.parseXULToFragment(
-              `<toolbarbutton id="${id}" class="ai-tab-sorter-btn" tooltiptext="${tooltip}"/>`
-            ).firstChild;
-            btn.addEventListener("command", onClick);
-          } catch (e) { log("button injection failed", e); return; }
-        }
-        // (Re)position: Zen rebuilds strips; also upgrades old bottom placement.
-        try { spot.insert(btn); } catch (_e) { /* already in place */ }
-      };
-
-      place(this.SORT_ID, "AI Tab Sorter — sort tabs into groups (select tabs to sort only them)",
-        () => SortController.sort());
-      // Gear follows the sort button.
-      const sortBtn = document.getElementById(this.SORT_ID);
-      if (sortBtn?.isConnected) {
-        let gear = document.getElementById(this.GEAR_ID);
-        if (!gear || !gear.isConnected) {
-          try {
-            gear = window.MozXULElement.parseXULToFragment(
-              `<toolbarbutton id="${this.GEAR_ID}" class="ai-tab-sorter-btn" tooltiptext="AI Tab Sorter settings"/>`
-            ).firstChild;
-            gear.addEventListener("command", () => SettingsPanel.open(gear));
-            sortBtn.after(gear);
-          } catch (e) { log("gear button injection failed", e); }
-        } else {
-          try { sortBtn.after(gear); } catch (_e) { /* in place */ }
-        }
+    static setSorting(on, tabCount = 0) {
+      const btn = this.#btn();
+      if (!btn) return;
+      btn.dataset.busy = on ? "true" : "false";
+      if (on) {
+        btn.setAttribute("label", `↻ Sorting ${tabCount}…`);
+        btn.textContent = `↻ Sorting ${tabCount}…`;
+      } else {
+        btn.setAttribute("label", this.LABEL);
+        btn.textContent = this.LABEL;
       }
     }
 
-    static #warnedNoAnchor = false;
-
-    static setSorting(on, tabCount = 0) {
-      const btn = document.getElementById(this.SORT_ID);
-      if (!btn) return;
-      btn.classList.toggle("ai-sorting", !!on);
-      if (on) btn.setAttribute("tooltiptext", `Sorting ${tabCount} tabs…`);
-    }
-
     static setStatus(state, message, ms = 3000) {
-      const btn = document.getElementById(this.SORT_ID);
+      const btn = this.#btn();
       if (!btn) { console.info(LOG_PREFIX, message); return; }
       clearTimeout(this.#statusTimer);
-      btn.classList.remove("ats-done", "ats-err");
-      btn.setAttribute("tooltiptext", message);
-      if (state) btn.classList.add(state === "done" ? "ats-done" : "ats-err");
+      btn.dataset.state = state || "";
+      btn.setAttribute("label", message);
+      btn.textContent = message;
       this.#statusTimer = setTimeout(() => {
-        btn.classList.remove("ats-done", "ats-err");
-        btn.setAttribute("tooltiptext", "AI Tab Sorter — sort tabs into groups (select tabs to sort only them)");
+        delete btn.dataset.state;
+        btn.setAttribute("label", this.LABEL);
+        btn.textContent = this.LABEL;
       }, ms);
-    }
-
-    static reattachHooks() {
-      // 1) Zen workspace hooks — strip rebuilds destroy injected buttons
-      try {
-        const ws = window.gZenWorkspaces;
-        if (ws && !ws.__aiTabSorterHooked) {
-          ws.__aiTabSorterHooked = true;
-          for (const name of ["onTabBrowserInserted", "updateTabsContainers", "changeWorkspace"]) {
-            const orig = ws[name];
-            if (typeof orig !== "function") continue;
-            ws[name] = function hooked(...args) {
-              const r = orig.apply(this, args);
-              setTimeout(() => ButtonInjector.ensure(), 150);
-              return r;
-            };
-          }
-        }
-      } catch (e) { log("workspace hook failed", e); }
-
-      // 2) MutationObserver — belt & braces for any strip restructuring
-      try {
-        const tc = document.getElementById("tabbrowser-tabs");
-        if (tc && !this.#observer) {
-          this.#observer = new MutationObserver(() => {
-            clearTimeout(this.#reattachTimer);
-            this.#reattachTimer = setTimeout(() => this.ensure(), 400);
-          });
-          this.#observer.observe(tc, { childList: true, subtree: true });
-        }
-      } catch (e) { log("observer setup failed", e); }
     }
   }
 
   /* ══════════════════════════════════════════════════════════════
-   * SettingsPageEnhancer — puts ⟳ Fetch Models INSIDE the Sine mod
-   * settings panel, right next to the "Model name" field (user-facing
-   * request). Runs only in preferences.xhtml. Sine gives each pref row
-   * id = pref property; string prefs save on the input's `change` event,
-   * so picking a model reuses Sine's own save path + restart toast.
+   * SettingsPageEnhancer — runs in the settings page (about:
+   * preferences), where Sine renders mod preferences. Sine builds
+   * each pref row with id = pref property with dots REPLACED BY
+   * DASHES (preferences.sys.mjs: prefEl.id = property.replace(
+   * /\./g, "-")) → the model row is #mod-aitabsort-model. String
+   * prefs save on the input's `change` event, so writing input.value
+   * + dispatching change reuses Sine's own save path (pref set +
+   * mods rebuild + restart toast). We inject:
+   *   • a menulist (model dropdown, fed by the cached model list)
+   *   • a "⟳ Fetch Models" button
+   * Everything is built with createXULElement — NO innerHTML, so the
+   * chrome-URL sanitizer can never strip it.
    * ══════════════════════════════════════════════════════════════ */
   class SettingsPageEnhancer {
-    static MODEL_ROW_ID = "mod.aitabsort.model";
+    static MODEL_ROW = "mod-aitabsort-model";
+    static PROVIDER_ROW = "mod-aitabsort-provider";
+    static BASE_ROW = "mod-aitabsort-baseURL";
+    static MENULIST_ID = "ats-model-menulist";
+    static FETCH_BTN_ID = "ats-fetch-models-btn";
+    static FETCH_ITEM = "__ats_fetch__";
     static #timer = null;
-    static #enhanced = new WeakSet();
+    static #observed = false;
 
     static init() {
-      // The Mods section builds lazily — poll for the row for up to 2 min.
-      let tries = 0;
-      this.#timer = setInterval(() => {
-        tries += 1;
-        const row = document.getElementById(this.MODEL_ROW_ID);
-        if (row) {
-          clearInterval(this.#timer);
-          this.#enhance(row);
-        } else if (tries > 300) {
-          clearInterval(this.#timer);
-        }
-      }, 400);
-      // Zen rebuilds rows when switching settings categories.
+      // Sine builds the mods list lazily and WIPES + rebuilds it on every
+      // pref change (manager.rebuildMods) — scan forever, it's cheap.
+      this.#scan();
+      this.#timer = setInterval(() => this.#scan(), 1200);
       try {
-        const obs = new MutationObserver(() => {
-          const row = document.getElementById(this.MODEL_ROW_ID);
-          if (row && !this.#enhanced.has(row)) this.#enhance(row);
-        });
+        const obs = new MutationObserver(() => this.#scan());
         obs.observe(document.documentElement, { childList: true, subtree: true });
+        this.#observed = true;
+      } catch (_e) { /* polling still covers us */ }
+      console.info(LOG_PREFIX, `settings enhancer active (v${VERSION}) — polling: ${!!this.#timer}, observer: ${this.#observed}`);
+    }
+
+    static #scan() {
+      const row = document.getElementById(this.MODEL_ROW);
+      if (row && row.isConnected && !row.querySelector("#" + this.MENULIST_ID)) {
+        this.#enhanceModelRow(row);
+      }
+      this.#hookProviderRow();
+    }
+
+    static #cachedModels() {
+      try { return JSON.parse(PrefStore.get("modelList") || "[]"); } catch (_e) { return []; }
+    }
+
+    static #setMenulistValue(ml, value, label) {
+      try {
+        ml.setAttribute("value", value ?? "");
+        ml.setAttribute("label", label ?? value ?? "");
       } catch (_e) { /* non-fatal */ }
     }
 
-    static #enhance(row) {
-      if (this.#enhanced.has(row) || !row.isConnected) return;
-      this.#enhanced.add(row);
-      try {
-        const btn = document.createXULElement("toolbarbutton");
-        btn.setAttribute("label", "⟳ Fetch Models");
-        btn.setAttribute("tooltiptext", "Query the provider's model list and pick one");
-        btn.style.cssText = "min-height:28px;padding:2px 8px;cursor:pointer;";
-        btn.addEventListener("command", () => this.#fetch(row, btn));
-        row.appendChild(btn);
-        console.info(LOG_PREFIX, "Fetch Models added to settings panel (Model row)");
-      } catch (e) { log("settings enhancer failed", e); }
+    static #rebuildPopup(mp, models, currentValue) {
+      for (const child of [...mp.children]) child.remove();
+      const fetchItem = document.createXULElement("menuitem");
+      fetchItem.setAttribute("value", this.FETCH_ITEM);
+      fetchItem.setAttribute("label", "⟳ Fetch models from provider…");
+      mp.append(fetchItem);
+      const ids = new Set();
+      if (currentValue && !models.some((m) => m.id === currentValue)) {
+        const cur = document.createXULElement("menuitem");
+        cur.setAttribute("value", currentValue);
+        cur.setAttribute("label", `${currentValue} (current)`);
+        mp.append(cur);
+        ids.add(currentValue);
+      }
+      for (const m of models) {
+        if (ids.has(m.id)) continue;
+        const item = document.createXULElement("menuitem");
+        item.setAttribute("value", m.id);
+        item.setAttribute("label", m.label || m.id);
+        mp.append(item);
+        ids.add(m.id);
+      }
     }
 
-    static async #fetch(row, btn) {
-      const oldLabel = btn.getAttribute("label");
-      btn.setAttribute("label", "Fetching…");
+    static #enhanceModelRow(row) {
+      try {
+        const input = row.querySelector("input");
+        if (!input) { log("model row found but has no input — skipping"); return; }
+
+        const current = String(input.value || PrefStore.get("model") || "").trim();
+
+        const ml = document.createXULElement("menulist");
+        ml.id = this.MENULIST_ID;
+        ml.setAttribute("editable", "false");
+        ml.setAttribute("flex", "1");
+        ml.setAttribute("tooltiptext", "Pick a model — use ⟳ inside the list to fetch the provider's models");
+        const mp = document.createXULElement("menupopup");
+        this.#rebuildPopup(mp, this.#cachedModels(), current);
+        ml.append(mp);
+        this.#setMenulistValue(ml, current, current || "(no model — fetch or type below)");
+
+        ml.addEventListener("command", () => {
+          const value = ml.getAttribute("value");
+          if (!value || value === this.FETCH_ITEM) {
+            this.#fetchModels();
+            return;
+          }
+          this.#applyModel(input, value);
+        });
+
+        const btn = document.createXULElement("button");
+        btn.id = this.FETCH_BTN_ID;
+        btn.setAttribute("label", "⟳ Fetch Models");
+        btn.setAttribute("tooltiptext", "Query the provider's /models endpoint and fill the dropdown");
+        btn.addEventListener("command", () => this.#fetchModels());
+
+        row.append(ml, btn);
+        console.info(LOG_PREFIX, "model dropdown + Fetch Models injected into the settings panel");
+      } catch (e) {
+        console.error(LOG_PREFIX, "settings model-row enhancement failed:", e);
+      }
+    }
+
+    static #applyModel(input, modelId) {
+      PrefStore.set("model", modelId);
+      try {
+        input.value = modelId;
+        input.dispatchEvent(new Event("change", { bubbles: true })); // Sine saves + rebuilds
+      } catch (_e) { /* pref already set directly */ }
+      console.info(LOG_PREFIX, "model set to:", modelId);
+    }
+
+    static async #fetchModels() {
+      const btn = document.getElementById(this.FETCH_BTN_ID);
+      const ml = document.getElementById(this.MENULIST_ID);
+      const oldLabel = btn?.getAttribute("label");
+      if (btn) btn.setAttribute("label", "Fetching…");
+      if (btn) btn.setAttribute("disabled", "true");
       try {
         const models = await ProviderHub.listModels();
         PrefStore.set("modelList", JSON.stringify(models));
-        btn.setAttribute("label", `✓ ${models.length} models — pick one ▾`);
-        this.#showPicker(row, btn, models);
-      } catch (err) {
-        btn.setAttribute("label", `✗ ${err.message}`);
-        setTimeout(() => btn.setAttribute("label", oldLabel), 4000);
-        console.error(LOG_PREFIX, "settings Fetch Models failed:", err);
-        return;
-      }
-      setTimeout(() => btn.setAttribute("label", oldLabel), 6000);
-    }
-
-    static #showPicker(row, btn, models) {
-      const picker = document.createXULElement("panel");
-      picker.setAttribute("type", "arrow");
-      picker.style.cssText = "-moz-appearance:none;appearance:none;";
-      const box = document.createXULElement("vbox");
-      box.style.cssText = "max-height:300px;overflow:auto;min-width:260px;padding:4px;";
-      for (const m of models) {
-        const item = document.createXULElement("toolbarbutton");
-        item.setAttribute("label", m.label || m.id);
-        item.style.cssText = "padding:3px 8px;text-align:start;cursor:pointer;";
-        item.addEventListener("command", () => {
-          this.#applyModel(row, m.id);
-          picker.hidePopup();
-          picker.remove();
-        });
-        box.appendChild(item);
-      }
-      picker.appendChild(box);
-      document.documentElement.appendChild(picker);
-      picker.addEventListener("popuphidden", () => picker.remove(), { once: true });
-      picker.openPopup(btn, "after_start", 0, 0, false, null);
-    }
-
-    static #applyModel(row, modelId) {
-      PrefStore.set("model", modelId);
-      // Drive Sine's own save path so the input UI + pref stay in sync.
-      try {
-        const input = row.querySelector("input[type=text], input:not([type])");
-        if (input) {
-          input.value = modelId;
-          input.dispatchEvent(new Event("change", { bubbles: true }));
+        if (ml?.isConnected) {
+          const current = String(PrefStore.get("model") || "");
+          this.#rebuildPopup(ml.firstElementChild, models, current);
+          this.#setMenulistValue(ml, current, current || `✓ ${models.length} models — pick one ▾`);
+          if (!current) this.#setMenulistValue(ml, "", `✓ ${models.length} models — pick one ▾`);
         }
-      } catch (_e) { /* pref already set directly */ }
+        if (btn) {
+          btn.setAttribute("label", `✓ ${models.length} models`);
+          setTimeout(() => btn.setAttribute("label", oldLabel || "⟳ Fetch Models"), 4000);
+        }
+        console.info(LOG_PREFIX, `fetched ${models.length} models`);
+      } catch (err) {
+        if (btn) {
+          btn.setAttribute("label", `✗ ${err.message}`);
+          setTimeout(() => btn.setAttribute("label", oldLabel || "⟳ Fetch Models"), 6000);
+        }
+        console.error(LOG_PREFIX, "Fetch Models failed:", err);
+      } finally {
+        btn?.removeAttribute("disabled");
+      }
+    }
+
+    /** When the provider preset changes, keep the base URL in sync (only
+     *  if the user hasn't chosen a custom URL). Sine saves the provider
+     *  itself; we just mirror the preset's default endpoint. */
+    static #hookProviderRow() {
+      const row = document.getElementById(this.PROVIDER_ROW);
+      const ml = row?.querySelector("menulist");
+      if (!row || !ml || ml.dataset.atsHooked) return;
+      ml.dataset.atsHooked = "1";
+      ml.addEventListener("command", () => {
+        try {
+          const id = ml.getAttribute("value");
+          const preset = ProviderHub.PRESETS[id];
+          if (!preset?.baseURL) return;
+          const current = String(PrefStore.get("baseURL") || "").trim();
+          const isPresetURL = !current || Object.values(ProviderHub.PRESETS).some((p) => p.baseURL === current);
+          if (!isPresetURL) return; // user set a custom URL — leave it
+          PrefStore.set("baseURL", preset.baseURL);
+          const baseRow = document.getElementById(this.BASE_ROW);
+          const baseInput = baseRow?.querySelector("input");
+          if (baseInput) {
+            baseInput.value = preset.baseURL;
+            baseInput.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          log("provider changed → base URL synced to", preset.baseURL);
+        } catch (e) { log("provider hook failed:", e); }
+      });
     }
   }
 
@@ -1279,10 +1248,9 @@
     static async init() {
       if (typeof document === "undefined") return; // Node unit-test context
       if (IS_PREFS) {
-        // Settings window: no tab strip — enhance the Sine prefs panel instead.
+        // Settings page: no tab strip — enhance the Sine prefs panel only.
         globalThis.aiTabSorter = { version: VERSION, prefs: PrefStore, providers: ProviderHub };
         SettingsPageEnhancer.init();
-        console.info(LOG_PREFIX, `settings-page enhancer active (v${VERSION})`);
         return;
       }
       if (document.readyState === "loading") {
@@ -1296,36 +1264,31 @@
 
       // Zen's built-in AI grouping fights mods that manage groups — warn.
       try {
-        if (Services.prefs.getBoolPref("browser.tabs.groups.smart.enabled", false)) {
+        if (SVCS.prefs.getBoolPref("browser.tabs.groups.smart.enabled", false)) {
           console.warn(LOG_PREFIX, "browser.tabs.groups.smart.enabled is TRUE — Zen's built-in AI grouping can conflict with this mod. Set it to false in about:config.");
         }
       } catch (_e) { /* noop */ }
 
-      if (typeof gBrowser.addTabGroup !== "function") {
-        console.warn(LOG_PREFIX, "gBrowser.addTabGroup missing — install Advanced Tab Groups (github.com/Vertex-Mods/Advanced-Tab-Groups) for the group UI.");
-      }
-
       if (PrefStore.get("enabled") && PrefStore.get("showButtons")) {
-        ButtonInjector.ensure();
-        ButtonInjector.reattachHooks();
-        // Workspace strips can mount well after startup — keep retrying.
-        for (const delay of [500, 1000, 3000, 7000, 15000]) {
-          setTimeout(() => ButtonInjector.ensure(), delay);
+        SortButton.ensure();
+        // The Clear control can mount well after startup — timed retries;
+        // the hover watcher covers everything after that.
+        for (const delay of [500, 1500, 4000, 8000, 15000]) {
+          setTimeout(() => SortButton.placeTwin(), delay);
         }
+        console.info(LOG_PREFIX, `initialized v${VERSION} — Sort twin: ${SortButton.twinIsCurrent() ? "beside Clear ✓" : "waiting for the Clear control (hover the tabs header)"}`);
       } else {
-        console.info(LOG_PREFIX, `buttons hidden (enabled=${PrefStore.get("enabled")}, showButtons=${PrefStore.get("showButtons")}) — toggle in Sine mod preferences`);
+        console.info(LOG_PREFIX, `initialized v${VERSION} — button hidden (enable it in the mod settings)`);
       }
 
       globalThis.aiTabSorter = {
         version: VERSION,
         sort: () => SortController.sort(),
-        openSettings: (btn) => SettingsPanel.open(btn || document.getElementById(ButtonInjector.GEAR_ID)),
         isSorting: () => SortController.isSorting(),
         prefs: PrefStore,
         providers: ProviderHub,
-        buttons: ButtonInjector,
+        button: SortButton,
       };
-      console.info(LOG_PREFIX, `initialized v${VERSION} — buttons: ${document.getElementById(ButtonInjector.SORT_ID) ? "injected" : "pending anchor"}`);
       log("initialized v" + VERSION);
     }
   }
