@@ -3,6 +3,54 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.1.7] — 2026-08-29
+
+The "flat and honest" release: two-level names removed, prompt hardened
+against real-world failures observed live.
+
+### Removed
+- **`Topic / Detail` two-level naming** — it produced awkward pseudo-folder
+  labels and single-tab sub-groups. Groups are back to ONE flat, descriptive
+  name (2–4 words). If a model still answers with a slashed name, the parser
+  keeps only the Topic part, so sibling sub-groups merge into one group.
+
+### Changed
+- **Anti-title-echo rule** — the model is now explicitly forbidden from
+  copying or lightly editing a tab's title as the group name (live failure:
+  a group called "Mechanics PYQ Lab — ESEM1 4 Papers, Decoded for 2026").
+  The parser also strips trailing punctuation left by truncated echoes and
+  caps names at 4 words / 40 chars.
+- **No singletons, no orphans** — every group must hold at least 2 tabs and
+  every tab must be assigned; a lone tab goes into the closest related group
+  instead of getting its own "Whatsapp"-style group.
+- **No vague names** — "General", "Misc", "Documents", "Group 1" etc. are
+  forbidden; the model must name the actual subject.
+- **Bad-name anti-examples** — the few-shot block now shows the four real
+  failure shapes (copied title, site-name singleton, vague bucket, slash
+  sub-level) so even small models recognize what to avoid.
+- Local files are used as naming evidence (`FMS-sem2.pdf` → that course),
+  matching the URL-as-evidence rule.
+
+### Fixed
+- **Stale singleton groups could survive forever** — the reuse path of the
+  grouping engine now checks the minimum group size too: if neither the
+  plan's tabs nor the existing group reach the minimum (default 2), the
+  group is dissolved instead of being perpetuated on every re-sort.
+
+## [0.1.6] — 2026-08-29
+
+The "explain my errors" patch.
+
+### Fixed
+- **HTTP 410 from NVIDIA NIM** (and any provider) now produces a readable,
+  actionable message instead of an empty string: the hint tells you the model
+  was **retired by the provider** and to click *Fetch Models* in
+  Zen Settings → Mods → AI Tab Sorter to pick a current one. NVIDIA removes
+  preview models regularly — this is a provider-side event, not a bug.
+- Added hints for HTTP 422 (payload rejected — try another model) and 5xx
+  (provider server trouble — retry or switch), and extended the 404 hint to
+  cover "model name no longer exists".
+
 ## [0.1.5] — 2026-08-29
 
 The "professional prompting" release: groups follow meaning, not websites.

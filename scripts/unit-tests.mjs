@@ -100,11 +100,14 @@ test("prompt embeds existing groups with exact-reuse rule", () => {
   assert.ok(!/^- GitHub$/m.test(p)); // must not teach site-name grouping
 });
 
-test("prompt forbids lazy site names and teaches two-level naming", () => {
+test("prompt forbids site names, title echoes, singletons and vague names", () => {
   const p = PromptBuilder.build([{ title: "t", hostname: "h.com", url: "u" }], [], CFG);
   assert.ok(p.includes("NEVER use a bare site/brand name"));
-  assert.ok(p.includes("Topic / Detail"));
+  assert.ok(p.includes("NEVER copy or lightly edit one tab's title"));
+  assert.ok(p.includes("at least 2 tabs"));
+  assert.ok(p.includes("NO VAGUE NAMES"));
   assert.ok(p.includes("mechanics-solutions")); // URL-as-evidence rule
+  assert.ok(!p.includes('"Topic / Detail"'));   // two-level naming removed
 });
 
 test("full-context payload carries the meta description; private modes drop it", () => {
@@ -178,14 +181,19 @@ test("normalizeCategory strips common model noise", () => {
 
 test("normalizeCategory caps runaway labels", () => {
   const long = ResponseParser.normalizeCategory("one two three four five six seven eight");
-  assert.ok(long.split(" ").length <= 6);
-  assert.ok(long.length <= 50);
+  assert.ok(long.split(" ").length <= 4);
+  assert.ok(long.length <= 40);
 });
 
-test("normalizeCategory composes two-level Topic / Detail names", () => {
-  assert.equal(ResponseParser.normalizeCategory("mechanics/solutions"), "Mechanics / Solutions");
-  assert.equal(ResponseParser.normalizeCategory("Engineering Mechanics / Problem Sets"), "Engineering Mechanics / Problem Sets");
-  assert.equal(ResponseParser.normalizeCategory("1. japan trip / booking"), "Japan Trip / Booking");
+test("normalizeCategory collapses stray Topic / Detail answers to the Topic", () => {
+  assert.equal(ResponseParser.normalizeCategory("mechanics/solutions"), "Mechanics");
+  assert.equal(ResponseParser.normalizeCategory("Engineering Mechanics / Problem Sets"), "Engineering Mechanics");
+  assert.equal(ResponseParser.normalizeCategory("1. japan trip / booking"), "Japan Trip");
+});
+
+test("normalizeCategory strips trailing punctuation from truncated title echoes", () => {
+  assert.equal(ResponseParser.normalizeCategory("Mechanics PYQ Lab — ESEM1 4 Papers, Decoded for 2026"), "Mechanics PYQ Lab");
+  assert.equal(ResponseParser.normalizeCategory("Study Notes —"), "Study Notes");
 });
 
 test("normalizeCategory keeps real names that start like junk words", () => {
@@ -237,10 +245,10 @@ test("parseLines: repairs numbering and prefixes from small models", () => {
   assert.deepEqual(out, ["GitHub", "YouTube", "News"]);
 });
 
-test("parseLines: two-level names survive intact", () => {
+test("parseLines: stray two-level answers merge into one flat group", () => {
   const out = ResponseParser.parseLines(
-    "Engineering Mechanics / Lectures\nEngineering Mechanics / Problem Sets\nAI Chat Assistants", 3);
-  assert.deepEqual(out, ["Engineering Mechanics / Lectures", "Engineering Mechanics / Problem Sets", "AI Chat Assistants"]);
+    "Engineering Mechanics / Lectures\nEngineering Mechanics / Problem Sets\nAI Assistants", 3);
+  assert.deepEqual(out, ["Engineering Mechanics", "Engineering Mechanics", "AI Assistants"]);
 });
 
 /* ── ResponseParser.parseJSON ───────────────────────────────── */

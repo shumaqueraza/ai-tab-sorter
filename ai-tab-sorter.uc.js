@@ -27,7 +27,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.1.5";
+  const VERSION = "0.1.7";
   const PREF_BRANCH = "mod.aitabsort.";
   const LOG_PREFIX = "[AITabSorter]";
 
@@ -150,8 +150,11 @@
       } catch (_e) { /* non-JSON error body */ }
       let hint = "";
       if (res.status === 401 || res.status === 403) hint = "Check your API key.";
-      else if (res.status === 404) hint = "Check the base URL (for OpenAI-compatible services it usually ends with /v1).";
+      else if (res.status === 404) hint = "Check the base URL (for OpenAI-compatible services it usually ends with /v1), or the model name no longer exists.";
+      else if (res.status === 410) hint = "This model was RETIRED by the provider (NVIDIA NIM removes preview models regularly). Open Zen Settings → Mods → AI Tab Sorter, click Fetch Models, and pick a current model.";
+      else if (res.status === 422) hint = "The provider rejected the request payload — try a different model.";
       else if (res.status === 429) hint = "Rate limited — wait a moment or switch provider/model.";
+      else if (res.status >= 500) hint = "The provider's server is having trouble — retry, or switch model/provider.";
       throw new ProviderError(`HTTP ${res.status} from ${url}: ${detail}`, hint);
     }
     return res.json();
@@ -316,7 +319,8 @@
       const host = String(data.hostname || "").replace(/^www\./, "");
       if (mode === "title-host") return `Title: ${title} | Host: ${host}`;
       // Full context mode: URL path is EVIDENCE for the subject
-      // (github.com/alice/mechanics-solutions → "Mechanics Solutions"),
+      // (github.com/alice/mechanics-solutions → the group is
+      // "Engineering Mechanics"),
       // and the meta description says what the page is actually about.
       const desc = String(data.description || "").trim();
       return `Title: ${title} | Host: ${host} | URL: ${String(data.url || "").slice(0, 200)}`
@@ -331,47 +335,52 @@
         .join("\n");
       const existingNames = (existingGroupLabels || []).filter(Boolean);
       const existing = existingNames.length
-        ? `GROUPS ALREADY IN THE STRIP: ${existingNames.join(" | ")}. When a tab belongs to one of them, output that EXACT full name (keeping any " / " part, identical spelling) — never a variation, never a shortened form.`
+        ? `GROUPS ALREADY IN THE STRIP: ${existingNames.join(" | ")}. When a tab belongs to one of them, output that EXACT name (identical spelling) — never a variation, never a shortened form.`
         : "GROUPS ALREADY IN THE STRIP: none — design a fresh taxonomy.";
 
       const rules = [
-        "GROUP BY MEANING, NOT BY WEBSITE. What matters is what each tab is FOR — the project, subject, task or purpose it serves. Tabs on different sites that serve the same purpose MUST receive the same group name (a YouTube lecture, a PDF and a GitHub repo for the same course belong together).",
-        "NEVER use a bare site/brand name as a group (\"GitHub\", \"Youtube\", \"Chatgpt\", \"Google\", \"Reddit\", \"Docs\", \"Search\", \"Pdf\"). A site name is allowed only when the tabs are ABOUT that site itself (its settings, its account, its administration).",
-        "NAMING: name groups after the shared subject/project/task — e.g. \"Engineering Mechanics / Lectures\", \"Engineering Mechanics / Problem Sets\", \"Thesis Research\", \"Japan Trip / Booking\", \"Rust Learning / Tutorials\".",
-        `HIERARCHY: use two-level names "Topic / Detail" when a topic has enough tabs to split into details (at least 2 tabs per detail group); use plain "Topic" when it does not. Max 3 words per level, Title Case. Sibling groups must repeat the identical Topic spelling so they sort together. ${this.GRANULARITY[cfg.granularity] || this.GRANULARITY[3]}`,
-        "READ THE URL AS EVIDENCE, not as the label: github.com/alice/mechanics-solutions means the subject is mechanics solutions — the group is \"Engineering Mechanics / Solutions\", never \"Github\". File names and URL paths usually contain the real topic.",
+        "GROUP BY MEANING, NOT BY WEBSITE. What matters is what each tab is FOR — the project, subject or task it serves. Tabs on different sites that serve the same purpose MUST receive the same group name (a YouTube lecture, a PDF and a GitHub repo for the same course belong in ONE group).",
+        "NEVER use a bare site/brand name as a group (\"Github\", \"Youtube\", \"Chatgpt\", \"Whatsapp\", \"Google\", \"Reddit\", \"Pdf\", \"Docs\"). A site name is allowed only when the tabs are ABOUT that site itself (its settings, account or administration).",
+        "NAMING: one flat name of 2-4 Title Case words, after the shared subject/project/task — \"Engineering Mechanics\", \"Thesis Research\", \"Japan Trip\", \"Rust Learning\", \"Job Applications\". No slashes, no sub-levels, no colons.",
+        "NEVER copy or lightly edit one tab's title as the group name. The name must describe the WHOLE set of tabs, not its loudest member.",
+        "NO VAGUE NAMES: \"General\", \"Misc\", \"Other\", \"Documents\", \"Resources\", \"Stuff\", \"Group 1\" are forbidden — dig one level deeper and name the actual subject.",
+        `NO SINGLETONS, NO ORPHANS: every group must hold at least 2 tabs, and every tab must be assigned to exactly one group. If a tab fits nowhere, put it in the closest related group — a slightly broader group always beats a one-tab group. ${this.GRANULARITY[cfg.granularity] || this.GRANULARITY[3]}`,
+        "READ THE URL AS EVIDENCE, not as the label: github.com/alice/mechanics-solutions means the subject is mechanics solutions; a local file named FMS-sem2.pdf means the subject is that course. State the subject itself, never the site.",
         existing,
-        "Every tab gets exactly one group name; tabs serving the same purpose MUST receive byte-identical names. Never echo these instructions as a name.",
+        "Tabs serving the same purpose MUST receive byte-identical names. Never echo these instructions as a name.",
       ];
 
       const example = [
+        "Bad names (all real failures): \"Mechanics PYQ Lab — ESEM1 4 Papers, Decoded for 2026\" (a copied tab title), \"Whatsapp\" (site name for one tab), \"General Documents\" (vague), \"Engineering Mechanics / Lectures\" (slash sub-level — use one flat name).",
         "Example —",
         "Tabs:",
         "1. Title: Lecture 3 — kinematics | Host: university.edu",
         "2. Title: mechanics-solutions · GitHub | Host: github.com",
         "3. Title: ES201 question paper | Host: university.edu",
         "4. Title: kinematics worked problems | Host: youtube.com",
-        "5. Title: ChatGPT | Host: chatgpt.com",
-        "6. Title: Claude | Host: claude.ai",
-        "Correct output (lines mode):",
-        "Engineering Mechanics / Lectures",
-        "Engineering Mechanics / Problem Sets",
-        "Engineering Mechanics / Problem Sets",
-        "Engineering Mechanics / Lectures",
-        "AI Chat Assistants",
-        "AI Chat Assistants",
+        "5. Title: FMS sem 2 syllabus.pdf | Host: (local file)",
+        "6. Title: ChatGPT | Host: chatgpt.com",
+        "7. Title: Claude | Host: claude.ai",
+        "Correct output (lines mode) — five tabs from five different places share ONE flat group, the two assistants share another:",
+        "Engineering Mechanics",
+        "Engineering Mechanics",
+        "Engineering Mechanics",
+        "Engineering Mechanics",
+        "Engineering Mechanics",
+        "AI Assistants",
+        "AI Assistants",
       ].join("\n");
 
       let output;
       if (mode) {
         output = [
           `Output ONLY a JSON array with exactly ${tabDataList.length} entries, one per tab, in input order:`,
-          '[{"i":1,"c":"Engineering Mechanics / Lectures"}, {"i":2,"c":"AI Chat Assistants"}]',
+          '[{"i":1,"c":"Engineering Mechanics"}, {"i":2,"c":"AI Assistants"}]',
           "No markdown, no code fences, no commentary — JSON only.",
         ].join("\n");
       } else {
         output = [
-          `Output EXACTLY ${tabDataList.length} lines — line i is the group of tab i, same order as the input. Each line is "Topic" or "Topic / Detail" — nothing else, no numbering, no commentary.`,
+          `Output EXACTLY ${tabDataList.length} lines — line i is the group of tab i, same order as the input. Each line: one flat group name of 2-4 Title Case words — no numbering, no slashes, no commentary.`,
         ].join("\n");
       }
 
@@ -420,11 +429,15 @@
       s = s.replace(/[.\s]+$/, "");
       s = s.replace(/\s+/g, " ").trim();
       if (!s) return "";
-      // Two-level names: normalize "a/b", "a // b", "a - b - c" spacing so
-      // sibling groups compose identical "Topic / Detail" strings.
-      if (s.includes("/") && !/^https?:/i.test(s)) s = s.replace(/\s*\/\s*/g, " / ");
-      s = s.split(" ").slice(0, 6).join(" ");            // cap: "Topic words / Detail words"
-      if (s.length > 50) s = s.slice(0, 50).trim();
+      // ONE flat level: if the model still answers "Topic / Detail",
+      // keep only the Topic — sibling sub-groups then merge into one.
+      if (s.includes("/") && !/^https?:/i.test(s)) s = s.split("/")[0].trim();
+      s = s.split(" ").slice(0, 4).join(" ");            // flat 2-4 word names
+      if (s.length > 40) s = s.slice(0, 40).trim();
+      // Trailing punctuation from truncated title-echoes ("Mechanics PYQ Lab —")
+      // must never reach the strip.
+      s = s.replace(/[.\s—–:,-]+$/, "").trim();
+      if (!s) return "";
       const titled = s.replace(/\b\p{L}[\p{L}\p{N}'&.-]*/gu, (w) =>
         w.length <= 3 && w === w.toUpperCase() ? w : w.charAt(0).toUpperCase() + w.slice(1)
       );
@@ -833,9 +846,7 @@
       };
 
       const applied = new Map(); // normName → group el (for the collapse pass)
-      // Create in NAME order so two-level siblings ("Topic / A", "Topic / B")
-      // end up adjacent in the strip — the closest thing to nested groups
-      // Firefox's flat tab-group model allows.
+      // Create in NAME order for a stable, predictable layout.
       const ordered = [...plan].sort((a, b) => a.name.localeCompare(b.name));
       for (const group of ordered) {
         const live = group.tabs.filter((t) => TabCollector.alive(t));
@@ -843,6 +854,16 @@
         const el = existing.get(group.name.toLowerCase());
 
         if (el?.isConnected && typeof el.addTabs === "function") {
+          // A stale singleton must not survive forever just because it
+          // already exists: if neither the plan's slice nor the group as a
+          // whole reaches min size, dissolve it (tab returns ungrouped).
+          if (live.length < minSize
+            && this.getGroupTabs(el).filter((t) => TabCollector.alive(t)).length < minSize) {
+            log(`group "${group.name}" stays below min size ${minSize} — dissolving`);
+            this.dissolve(el, "below min size");
+            stats.skipped += live.length;
+            continue;
+          }
           // ── reuse in place: move in only the tabs not already here ──
           const toAdd = live.filter((tab) => tab.group !== el);
           if (toAdd.length) {
